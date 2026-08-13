@@ -154,7 +154,8 @@ REPL 内置命令：
 
 ```bash
 pip install -e ".[web]"
-python -m codelet.web            # 打开 http://127.0.0.1:8000
+python -m codelet.web            # 起服务并自动打开浏览器（--no-open 关掉）
+# 或一键脚本： ./run-web.ps1        (Windows)   /   ./run-web.sh   (macOS/Linux)
 ```
 
 - **流式输出**:token 实时逐字显示(WebSocket)
