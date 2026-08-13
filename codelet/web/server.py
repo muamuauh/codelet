@@ -305,7 +305,8 @@ def create_app() -> FastAPI:
         for name in idx.names():
             s = idx.get(name)
             if s is not None:
-                out.append({"name": name, "description": s.description, "source": s.source or ""})
+                # source can be a Path -- stringify so response validation is happy.
+                out.append({"name": name, "description": s.description, "source": str(s.source or "")})
         return out
 
     @app.get("/api/commands")

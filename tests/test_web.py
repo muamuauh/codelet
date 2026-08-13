@@ -39,6 +39,12 @@ def test_rest_panels(client):
     assert "provider" in prof and "mode" in prof
     sess = client.get("/api/sessions").json()
     assert "project" in sess and "global" in sess
+    # /api/skills and /api/commands must return 200 with string fields even when
+    # a skill's `source` is a Path (a live run caught that as a 500).
+    r = client.get("/api/skills")
+    assert r.status_code == 200
+    assert all(isinstance(s.get("source"), str) for s in r.json())
+    assert client.get("/api/commands").status_code == 200
 
 
 def test_index_served(client):
