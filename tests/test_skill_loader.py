@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from miniclaudecode.skills.loader import (
+from codelet.skills.loader import (
     SkillIndex,
     load_skills,
     parse_skill_file,
@@ -74,10 +74,10 @@ def test_load_project_overrides_user(tmp_path: Path):
     user_dir = tmp_path / "user"
     project_dir = tmp_path / "proj"
     (user_dir).mkdir()
-    (project_dir / ".miniclaudecode" / "skills").mkdir(parents=True)
+    (project_dir / ".codelet" / "skills").mkdir(parents=True)
 
     _write_skill(user_dir / "shared.md", "shared", "user version")
-    _write_skill(project_dir / ".miniclaudecode" / "skills" / "shared.md", "shared", "project version")
+    _write_skill(project_dir / ".codelet" / "skills" / "shared.md", "shared", "project version")
     _write_skill(user_dir / "user-only.md", "user-only", "from user")
 
     index = load_skills(project_dir=project_dir, user_dir=user_dir)
@@ -88,7 +88,7 @@ def test_load_project_overrides_user(tmp_path: Path):
 def test_index_summary_truncates_long_descriptions():
     idx = SkillIndex()
     long_desc = "x" * 200
-    from miniclaudecode.skills.loader import Skill
+    from codelet.skills.loader import Skill
     idx.add(Skill(name="big", description=long_desc, body="b"))
     summary = idx.index_summary()
     assert "big" in summary
@@ -99,7 +99,7 @@ def test_index_summary_truncates_long_descriptions():
 
 def test_index_summary_caps_total_count():
     idx = SkillIndex(max_in_index=2)
-    from miniclaudecode.skills.loader import Skill
+    from codelet.skills.loader import Skill
     for i in range(5):
         idx.add(Skill(name=f"s{i}", description=f"d{i}", body="b"))
     summary = idx.index_summary()

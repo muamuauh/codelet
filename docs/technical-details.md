@@ -27,7 +27,7 @@
 
 **问题**：Anthropic API 强制要求 `tool_result` 数组的顺序与 `tool_use` 数组完全一致。一旦错位，API 返回 400，错误信息晦涩，调试地狱。
 
-**实现** ([agent_loop.py](../miniclaudecode/agent_loop.py) `_dispatch_parallel`)：
+**实现** ([agent_loop.py](../codelet/agent_loop.py) `_dispatch_parallel`)：
 
 ```python
 async def _dispatch_parallel(self, tool_calls: list[ToolCall]):
@@ -61,7 +61,7 @@ async def _dispatch_parallel(self, tool_calls: list[ToolCall]):
 
 **问题**：subagent 必须看不到父级的对话历史。如果父级的 prompt 里有敏感信息，泄漏到 subagent 的 LLM 调用就完蛋。
 
-**实现** ([subagent/runner.py](../miniclaudecode/subagent/runner.py))：
+**实现** ([subagent/runner.py](../codelet/subagent/runner.py))：
 
 ```python
 child = AgentLoop(
@@ -96,7 +96,7 @@ summary_text = await child.run_async(spec.prompt)  # 只把 spec.prompt 喂进�
 - child (depth=1) → grandchild (depth=2) ✓
 - grandchild (depth=2) → great-grandchild (depth=3) ✗ 拒绝
 
-**实现** ([subagent/runner.py](../miniclaudecode/subagent/runner.py))：
+**实现** ([subagent/runner.py](../codelet/subagent/runner.py))：
 
 ```python
 MAX_SUBAGENT_DEPTH = 2
@@ -136,7 +136,7 @@ class TaskTool(Tool):
 
 如果 subagent 直接用父级的 `TaskTool` 实例，subagent 想再 spawn 时读到的是**父级的 depth=0** 而不是自己的 depth=1，深度上限失效，递归无限。
 
-**实现** ([agent_loop.py](../miniclaudecode/agent_loop.py) `_wire_dynamic_tools`)：
+**实现** ([agent_loop.py](../codelet/agent_loop.py) `_wire_dynamic_tools`)：
 
 ```python
 def _wire_dynamic_tools(self, allowed_tools):
@@ -154,7 +154,7 @@ def _wire_dynamic_tools(self, allowed_tools):
     maybe("todo_write", lambda: TodoWriteTool(self.todo_store))
 ```
 
-每个 AgentLoop（包括 subagent）init 时都会**剥离**任何继承自父 registry 的 task/todo_write，**然后绑定到自己**。registry 用了 shallow copy（[runner.py](../miniclaudecode/subagent/runner.py) `_shallow_copy_registry`）所以这个 unregister 不会污染父级的 registry。
+每个 AgentLoop（包括 subagent）init 时都会**剥离**任何继承自父 registry 的 task/todo_write，**然后绑定到自己**。registry 用了 shallow copy（[runner.py](../codelet/subagent/runner.py) `_shallow_copy_registry`）所以这个 unregister 不会污染父级的 registry。
 
 **Skill 工具的特殊点**：只在 `self.skill_index.names()` 非空时注册。这样不装 skill 的用户不会看到一个废工具占 tokens。
 
@@ -166,7 +166,7 @@ def _wire_dynamic_tools(self, allowed_tools):
 
 **问题**：skill 越积越多时，system prompt 会被吃光。
 
-**两层防御** ([skills/loader.py](../miniclaudecode/skills/loader.py))：
+**两层防御** ([skills/loader.py](../codelet/skills/loader.py))：
 
 ```python
 @dataclass
@@ -196,7 +196,7 @@ System prompt 中只放 `name: description` 单行，**完整 body 在 `skill` �
 
 **问题**：Anthropic API 要求每个 `tool_use` block 后必须紧跟其 `tool_result`。**如果压缩切片切到这种配对的中间，下一次 API 调用直接 400**。
 
-**实现** ([context.py](../miniclaudecode/context.py))：
+**实现** ([context.py](../codelet/context.py))：
 
 ```python
 async def compact_if_needed(self, client: LLMClient) -> bool:
@@ -226,7 +226,7 @@ async def compact_if_needed(self, client: LLMClient) -> bool:
 
 **为什么 keep_recent ≥ 2**：默认 4。任何"工具调用 + 结果"配对最多占 2 条消息（assistant tool_use + user tool_result），keep 4 给一个 buffer：哪怕最近两轮各有一对配对也能完整保留。
 
-**触发时机**：在 [agent_loop.py](../miniclaudecode/agent_loop.py) `run_async` 里，**只在一个 turn 完整结束后**调用：
+**触发时机**：在 [agent_loop.py](../codelet/agent_loop.py) `run_async` 里，**只在一个 turn 完整结束后**调用：
 
 ```python
 self.context.add_assistant_message(response.raw_content)
@@ -248,7 +248,7 @@ except Exception as exc:
 
 ## 7. Hooks 协议设计
 
-**协议** ([hooks/runner.py](../miniclaudecode/hooks/runner.py))：
+**协议** ([hooks/runner.py](../codelet/hooks/runner.py))：
 
 | 事件 | 触发时机 | 阻断方式 | 可重写字段 |
 |---|---|---|---|
@@ -289,11 +289,11 @@ proc = subprocess.run(
 5. "anthropic" 默认
 ```
 
-**实现位置**：[settings.py](../miniclaudecode/settings.py) `resolve_profile` + [cli.py](../miniclaudecode/cli.py) `_build_config`。
+**实现位置**：[settings.py](../codelet/settings.py) `resolve_profile` + [cli.py](../codelet/cli.py) `_build_config`。
 
 **为什么 LLM_* 路径放在第 4 层而不是第 3 层**：用户在 settings.json 里**显式**写了 `"profile": "X"`，那是更明确的意图，应该胜过 .env 里的隐式配置。但如果 settings.json 没设默认 profile，LLM_* 应该自动生效（这就是用户最常见的 quick-start 路径）。
 
-**`--base-url` 不带 `--provider` 自动推断 OpenAI** ([cli.py](../miniclaudecode/cli.py))：
+**`--base-url` 不带 `--provider` 自动推断 OpenAI** ([cli.py](../codelet/cli.py))：
 
 ```python
 if args.provider is not None:
@@ -312,7 +312,7 @@ elif args.base_url is not None and args.profile is None:
 
 ## 9. OpenAI 兼容层的边界条件
 
-[openai_compat.py](../miniclaudecode/llm/openai_compat.py) 处理了一堆"看似 OpenAI 兼容"的中转站会偷偷踩的雷：
+[openai_compat.py](../codelet/llm/openai_compat.py) 处理了一堆"看似 OpenAI 兼容"的中转站会偷偷踩的雷：
 
 ### 9.1 仅 tool_calls 时 content 必须是 None
 
@@ -394,7 +394,7 @@ out.append({"role": "tool", "tool_call_id": tr["tool_use_id"], "content": str(bo
 
 **问题**：session 文件可能在写入过程中进程被 kill -9。如果直接 `f.write(json)`，留下半 JSON，下次 `load_session` 直接报 JSONDecodeError，用户重启就丢上下文。
 
-**实现** ([persistence/session.py](../miniclaudecode/persistence/session.py))：
+**实现** ([persistence/session.py](../codelet/persistence/session.py))：
 
 ```python
 def _write_atomic(path: Path, data: dict) -> Path:
@@ -426,7 +426,7 @@ def _write_atomic(path: Path, data: dict) -> Path:
 
 **问题**：大多数工具是阻塞的（subprocess、文件 IO）；少数是天然 async 的（httpx、subagent）。我们想让 agent loop 全异步，但又不想强迫每个工具作者写 async。
 
-**方案** ([tools/base.py](../miniclaudecode/tools/base.py))：
+**方案** ([tools/base.py](../codelet/tools/base.py))：
 
 ```python
 class Tool(ABC):
@@ -446,7 +446,7 @@ class Tool(ABC):
 
 > 把 `execute` 设为**非抽象**（默认 raise NotImplementedError）让 async-native 工具不必给 sync 路径写 stub。代价是 `Tool` 类不再保证有 `execute` —— 这是可接受的，注册器和 loop 都只调 `aexecute`，不会触发那个 `NotImplementedError`。
 
-**LLM 调用同样套这个壳子**：[agent_loop.py](../miniclaudecode/agent_loop.py)：
+**LLM 调用同样套这个壳子**：[agent_loop.py](../codelet/agent_loop.py)：
 
 ```python
 return await asyncio.to_thread(
@@ -476,7 +476,7 @@ return await asyncio.to_thread(
 2. 子类化测试容易：注入 `confirm_callback`
 3. 工具只暴露 `preview_diff(params) -> str | None` 数据，不持有 UI 概念
 
-**实现** ([agent_loop.py](../miniclaudecode/agent_loop.py))：
+**实现** ([agent_loop.py](../codelet/agent_loop.py))：
 
 ```python
 _DIFF_CONFIRM_TOOLS = {"write_file", "edit_file"}

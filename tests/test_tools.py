@@ -5,13 +5,13 @@ from pathlib import Path
 
 import pytest
 
-from miniclaudecode.tools.base import Tool, ToolRegistry, ToolResult
-from miniclaudecode.tools.bash_tool import BashTool
-from miniclaudecode.tools.file_edit import FileEditTool
-from miniclaudecode.tools.file_read import FileReadTool
-from miniclaudecode.tools.file_write import FileWriteTool
-from miniclaudecode.tools.glob_tool import GlobTool
-from miniclaudecode.tools.grep_tool import GrepTool
+from codelet.tools.base import Tool, ToolRegistry, ToolResult
+from codelet.tools.bash_tool import BashTool
+from codelet.tools.file_edit import FileEditTool
+from codelet.tools.file_read import FileReadTool
+from codelet.tools.file_write import FileWriteTool
+from codelet.tools.glob_tool import GlobTool
+from codelet.tools.grep_tool import GrepTool
 
 
 # ---------- Registry ----------

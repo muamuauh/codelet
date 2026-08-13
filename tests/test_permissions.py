@@ -1,10 +1,10 @@
 """PermissionGate tests (P1)."""
 from __future__ import annotations
 
-from miniclaudecode.config import Config, PermissionMode
-from miniclaudecode.permissions import PermissionGate
-from miniclaudecode.tools.bash_tool import BashTool
-from miniclaudecode.tools.file_write import FileWriteTool
+from codelet.config import Config, PermissionMode
+from codelet.permissions import PermissionGate
+from codelet.tools.bash_tool import BashTool
+from codelet.tools.file_write import FileWriteTool
 
 
 def test_auto_allows_safe_bash():

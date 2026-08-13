@@ -57,7 +57,7 @@ class SubAgentResult:
 
 
 SUBAGENT_PROMPT_TEMPLATE = """\
-You are a SubAgent ({agent_type}) inside miniClaudeCode.
+You are a SubAgent ({agent_type}) inside codelet.
 
 You were spawned for a focused task and operate in an isolated context: you
 cannot see the parent's conversation history or other subagents' work. Your

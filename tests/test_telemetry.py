@@ -5,11 +5,11 @@ from typing import Any
 
 import pytest
 
-from miniclaudecode.agent_loop import AgentLoop
-from miniclaudecode.config import Config, PermissionMode
-from miniclaudecode.llm.base import LLMClient, LLMResponse
-from miniclaudecode.telemetry import Telemetry
-from miniclaudecode.tools.base import ToolRegistry
+from codelet.agent_loop import AgentLoop
+from codelet.config import Config, PermissionMode
+from codelet.llm.base import LLMClient, LLMResponse
+from codelet.telemetry import Telemetry
+from codelet.tools.base import ToolRegistry
 
 
 def test_record_chat_priced_model():

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from miniclaudecode.settings import (
+from codelet.settings import (
     DEFAULT_API_KEY_ENV,
     load_env_files,
     load_settings,
@@ -240,8 +240,8 @@ def test_cli_base_url_without_provider_infers_openai(clean_env):
     """The user's case: pass just --base-url + --api-key + --model and it
     should Just Work without having to remember --provider openai."""
     from argparse import Namespace
-    from miniclaudecode.cli import _build_config
-    from miniclaudecode.config import LLMProvider
+    from codelet.cli import _build_config
+    from codelet.config import LLMProvider
 
     clean_env.setenv("ANTHROPIC_API_KEY", "should-not-be-used")
     args = Namespace(
@@ -259,8 +259,8 @@ def test_cli_base_url_without_provider_infers_openai(clean_env):
 def test_cli_base_url_with_explicit_provider_does_not_infer(clean_env):
     """Explicit --provider anthropic + --base-url should stay anthropic."""
     from argparse import Namespace
-    from miniclaudecode.cli import _build_config
-    from miniclaudecode.config import LLMProvider
+    from codelet.cli import _build_config
+    from codelet.config import LLMProvider
 
     args = Namespace(
         profile=None, provider="anthropic", model=None,
@@ -282,7 +282,7 @@ def test_settings_profiles_user_and_project_merge(tmp_path: Path):
             "anthropic": {"provider": "anthropic", "model": "claude-from-user"},
         },
     }), encoding="utf-8")
-    proj_settings = project_dir / ".miniclaudecode" / "settings.json"
+    proj_settings = project_dir / ".codelet" / "settings.json"
     proj_settings.parent.mkdir(parents=True)
     proj_settings.write_text(json.dumps({
         "profiles": {

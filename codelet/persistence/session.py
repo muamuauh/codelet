@@ -1,6 +1,6 @@
 """Session persistence -- JSON snapshots of ConversationContext.
 
-Sessions live at `~/.miniclaudecode/sessions/{id}.json`. Each save fully
+Sessions live at `~/.codelet/sessions/{id}.json`. Each save fully
 overwrites the file (atomic via tmp + rename) so an interrupted save can
 never produce a half-written corrupted snapshot.
 
@@ -45,7 +45,7 @@ if TYPE_CHECKING:  # pragma: no cover
     from ..agent_loop import AgentLoop
 
 
-SESSION_DIR = Path.home() / ".miniclaudecode" / "sessions"
+SESSION_DIR = Path.home() / ".codelet" / "sessions"
 PROJECT_REGISTRY_NAME = "sessions.json"
 
 
@@ -143,7 +143,7 @@ def list_sessions(base_dir: Path | None = None) -> list[dict[str, Any]]:
 # ---------- project-local session registry ----------
 
 def _project_dir_or_cwd(project_dir: Path | None) -> Path:
-    return Path(project_dir) if project_dir is not None else (Path.cwd() / ".miniclaudecode")
+    return Path(project_dir) if project_dir is not None else (Path.cwd() / ".codelet")
 
 
 def _registry_path(project_dir: Path | None) -> Path:

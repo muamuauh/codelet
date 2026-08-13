@@ -3,9 +3,9 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "miniclaudecode"
+name = "codelet"
 version = "0.1.0"
-description = "Enhanced miniClaudeCode -- learning fork with subagent / parallel / skill systems"
+description = "Enhanced codelet -- learning fork with subagent / parallel / skill systems"
 requires-python = ">=3.10"
 readme = "README.md"
 authors = [{ name = "gjq00" }]
@@ -25,10 +25,10 @@ dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
 swebench = ["datasets>=2.16"]
 
 [project.scripts]
-miniclaudecode = "miniclaudecode.cli:main"
+codelet = "codelet.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["miniclaudecode*"]
+include = ["codelet*"]
 exclude = ["tests*", "docs*"]
 
 [tool.pytest.ini_options]

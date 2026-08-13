@@ -1,4 +1,4 @@
-"""Generate SWE-bench Lite predictions with the miniClaudeCode agent.
+"""Generate SWE-bench Lite predictions with the codelet agent.
 
 For each task instance:
   1. Shallow-fetch the repo at `base_commit` into a clean clone.
@@ -31,15 +31,15 @@ from typing import Any
 
 from rich.console import Console
 
-from miniclaudecode.agent_loop import AgentLoop
-from miniclaudecode.cli import _build_config
-from miniclaudecode.config import PermissionMode
-from miniclaudecode.settings import load_env_files, load_settings
-from miniclaudecode.tools.base import ToolRegistry
+from codelet.agent_loop import AgentLoop
+from codelet.cli import _build_config
+from codelet.config import PermissionMode
+from codelet.settings import load_env_files, load_settings
+from codelet.tools.base import ToolRegistry
 
 DATASET = "princeton-nlp/SWE-bench_Lite"
 SPLIT = "test"
-MODEL_NAME = "miniclaudecode"
+MODEL_NAME = "codelet"
 OUT_DIR = Path(__file__).parent / "out"
 
 PROMPT_TEMPLATE = """\

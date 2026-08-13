@@ -5,9 +5,9 @@ from typing import Any
 
 import pytest
 
-from miniclaudecode.config import Config
-from miniclaudecode.context import ConversationContext
-from miniclaudecode.llm.base import LLMClient, LLMResponse
+from codelet.config import Config
+from codelet.context import ConversationContext
+from codelet.llm.base import LLMClient, LLMResponse
 
 
 class StubSummarizer(LLMClient):

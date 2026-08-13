@@ -16,7 +16,7 @@ from .base import Tool, ToolResult
 
 MAX_OUTPUT_CHARS = 30_000
 DEFAULT_TIMEOUT_SECONDS = 20.0
-USER_AGENT = "miniClaudeCode/0.1 (+https://github.com/gjq00/my-miniClaudeCode)"
+USER_AGENT = "codelet/0.1 (+https://github.com/gjq00/my-codelet)"
 
 
 class _TextExtractor(HTMLParser):

@@ -15,7 +15,7 @@ from typing import Any
 
 import pytest
 
-from miniclaudecode.llm.openai_compat import OpenAICompatClient
+from codelet.llm.openai_compat import OpenAICompatClient
 
 
 # ---------- stub the openai SDK ----------

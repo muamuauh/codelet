@@ -6,17 +6,17 @@ from typing import Any
 
 import pytest
 
-from miniclaudecode.agent_loop import AgentLoop
-from miniclaudecode.config import Config, PermissionMode
-from miniclaudecode.llm.base import LLMClient, LLMResponse
-from miniclaudecode.persistence.session import (
+from codelet.agent_loop import AgentLoop
+from codelet.config import Config, PermissionMode
+from codelet.llm.base import LLMClient, LLMResponse
+from codelet.persistence.session import (
     SessionStore,
     list_project_sessions,
     list_sessions,
     load_session,
     restore_into,
 )
-from miniclaudecode.tools.base import ToolRegistry
+from codelet.tools.base import ToolRegistry
 
 
 class StubLLM(LLMClient):
@@ -166,7 +166,7 @@ def test_project_registry_untouched_without_project_dir(tmp_path: Path):
 
 
 def test_todos_round_trip(tmp_path: Path):
-    from miniclaudecode.tools.todo_write import Todo
+    from codelet.tools.todo_write import Todo
 
     agent = _agent(tmp_path)
     agent.todo_store.todos = [

@@ -1,4 +1,4 @@
-"""Mini eval harness for miniClaudeCode.
+"""Mini eval harness for codelet.
 
 Each task = an initial workspace + a prompt + execution-based checks. The runner
 sets up the workspace in a temp dir, runs the real agent against it (sandboxed by

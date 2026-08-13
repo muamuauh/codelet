@@ -1,8 +1,8 @@
 """Skill tool tests."""
 from __future__ import annotations
 
-from miniclaudecode.skills.loader import Skill, SkillIndex
-from miniclaudecode.tools.skill_tool import SkillTool
+from codelet.skills.loader import Skill, SkillIndex
+from codelet.tools.skill_tool import SkillTool
 
 
 def _index_with(*pairs: tuple[str, str, str]) -> SkillIndex:
@@ -36,10 +36,10 @@ def test_skill_fetch_empty_name():
 def test_agent_loop_auto_registers_skill_when_present():
     """Skill tool should appear in the registry only when the skill index
     has at least one entry (otherwise we'd advertise an empty capability)."""
-    from miniclaudecode.agent_loop import AgentLoop
-    from miniclaudecode.config import Config, PermissionMode
-    from miniclaudecode.llm.base import LLMClient, LLMResponse
-    from miniclaudecode.tools.base import ToolRegistry
+    from codelet.agent_loop import AgentLoop
+    from codelet.config import Config, PermissionMode
+    from codelet.llm.base import LLMClient, LLMResponse
+    from codelet.tools.base import ToolRegistry
 
     class StubClient(LLMClient):
         def chat(self, **kwargs):

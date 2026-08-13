@@ -39,11 +39,11 @@ import yaml
 from rich.console import Console
 from rich.table import Table
 
-from miniclaudecode.agent_loop import AgentLoop
-from miniclaudecode.cli import _build_config
-from miniclaudecode.config import PermissionMode
-from miniclaudecode.settings import load_env_files, load_settings
-from miniclaudecode.tools.base import ToolRegistry
+from codelet.agent_loop import AgentLoop
+from codelet.cli import _build_config
+from codelet.config import PermissionMode
+from codelet.settings import load_env_files, load_settings
+from codelet.tools.base import ToolRegistry
 
 TASKS_DIR = Path(__file__).parent / "tasks"
 REPORTS_DIR = Path(__file__).parent / "reports"
@@ -307,7 +307,7 @@ def write_json_report(results: list[TaskResult]) -> Path:
 # ---------- entry point ----------
 
 def _build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="evals.runner", description="Run miniClaudeCode evals")
+    p = argparse.ArgumentParser(prog="evals.runner", description="Run codelet evals")
     p.add_argument("--tasks-dir", default=str(TASKS_DIR), help="Directory of *.yaml task files.")
     p.add_argument("--task", default=None, help="Run a single task file instead of the whole dir.")
     p.add_argument("--filter", default=None, help="Only run tasks whose name contains this string.")

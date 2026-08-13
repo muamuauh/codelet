@@ -1,8 +1,8 @@
 """ConversationContext tests (P1)."""
 from __future__ import annotations
 
-from miniclaudecode.config import Config
-from miniclaudecode.context import ConversationContext
+from codelet.config import Config
+from codelet.context import ConversationContext
 
 
 def test_add_messages_in_order():

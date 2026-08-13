@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from miniclaudecode.slash.loader import (
+from codelet.slash.loader import (
     SlashCommand,
     expand_command,
     load_commands,
@@ -70,7 +70,7 @@ def test_load_project_overrides_user(tmp_path: Path):
     user_dir = tmp_path / "user"
     project_dir = tmp_path / "p"
     _write(user_dir / "shared.md", "user version of {args}")
-    _write(project_dir / ".miniclaudecode" / "commands" / "shared.md", "project version of {args}")
+    _write(project_dir / ".codelet" / "commands" / "shared.md", "project version of {args}")
     _write(user_dir / "user-only.md", "from user")
 
     index = load_commands(project_dir=project_dir, user_dir=user_dir)

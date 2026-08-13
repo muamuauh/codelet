@@ -23,7 +23,7 @@ from .settings import load_env_files, load_settings, resolve_profile
 from .slash.loader import SlashCommandIndex, expand_command, load_commands
 from .tools.base import ToolRegistry
 
-BANNER = """[bold cyan]miniClaudeCode[/bold cyan] [dim]v0.1.0 (P5)[/dim]
+BANNER = """[bold cyan]codelet[/bold cyan] [dim]v0.1.0 (P5)[/dim]
 Enhanced fork: subagent + parallel + skill + hooks + telemetry + multi-provider.
 
 Built-in commands:
@@ -44,8 +44,8 @@ Built-in commands:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="miniclaudecode",
-        description="miniClaudeCode -- enhanced distilled agent loop",
+        prog="codelet",
+        description="codelet -- enhanced distilled agent loop",
     )
     p.add_argument(
         "--profile", default=None,
@@ -273,8 +273,8 @@ def _handle_slash(
         names = agent.skill_index.names()
         if not names:
             console.print("[dim]No skills loaded. Drop *.md files into "
-                          ".miniclaudecode/skills/ (project) or "
-                          "~/.miniclaudecode/skills/ (user).[/dim]")
+                          ".codelet/skills/ (project) or "
+                          "~/.codelet/skills/ (user).[/dim]")
             return True, None
         console.print("\n[bold]Loaded skills:[/bold]")
         for name in names:
@@ -288,8 +288,8 @@ def _handle_slash(
         names = slash_commands.names()
         if not names:
             console.print("[dim]No user commands. Drop *.md files into "
-                          ".miniclaudecode/commands/ (project) or "
-                          "~/.miniclaudecode/commands/ (user).[/dim]")
+                          ".codelet/commands/ (project) or "
+                          "~/.codelet/commands/ (user).[/dim]")
             return True, None
         console.print("\n[bold]User-defined slash commands:[/bold]")
         for name in names:
@@ -403,7 +403,7 @@ def main(argv: list[str] | None = None) -> int:
     # Session persistence: opt-out via --no-persist. If --resume <id> is given,
     # restore into the freshly built agent before the REPL starts.
     persist = not args.no_persist
-    project_dir = Path.cwd() / ".miniclaudecode"
+    project_dir = Path.cwd() / ".codelet"
     session_store = SessionStore(project_dir=project_dir) if persist else None
 
     if args.resume:

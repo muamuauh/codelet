@@ -14,11 +14,11 @@ from typing import Any
 
 import pytest
 
-from miniclaudecode.agent_loop import AgentLoop
-from miniclaudecode.config import Config, PermissionMode
-from miniclaudecode.llm.base import LLMClient, LLMResponse, ToolCall
-from miniclaudecode.subagent.runner import MAX_SUBAGENT_DEPTH
-from miniclaudecode.tools.base import Tool, ToolRegistry, ToolResult
+from codelet.agent_loop import AgentLoop
+from codelet.config import Config, PermissionMode
+from codelet.llm.base import LLMClient, LLMResponse, ToolCall
+from codelet.subagent.runner import MAX_SUBAGENT_DEPTH
+from codelet.tools.base import Tool, ToolRegistry, ToolResult
 
 
 # ---------- helpers ----------
@@ -105,7 +105,7 @@ async def test_subagent_context_does_not_see_parent_history():
         _text("subagent summary"),
     ]
     client = ScriptedClient({
-        "miniClaudeCode, a lightweight": parent_responses,  # parent system prompt
+        "codelet, a lightweight": parent_responses,  # parent system prompt
         "You are a SubAgent": sub_responses,  # subagent system prompt
     })
     parent = _make_parent(client, MarkerTool())
@@ -145,7 +145,7 @@ async def test_task_returns_subagent_final_text_to_parent():
     ]
     sub_responses = [_text("subagent summary line")]
     client = ScriptedClient({
-        "miniClaudeCode, a lightweight": parent_responses,
+        "codelet, a lightweight": parent_responses,
         "You are a SubAgent": sub_responses,
     })
     parent = _make_parent(client)
@@ -168,7 +168,7 @@ async def test_depth_cap_refuses_when_parent_is_already_at_max():
     """At parent_depth = MAX_SUBAGENT_DEPTH (=2), spawning would put the child
     at depth 3 -- which exceeds the cap. The runner must refuse without ever
     calling the LLM."""
-    from miniclaudecode.subagent.runner import SubAgentSession, SubAgentSpec
+    from codelet.subagent.runner import SubAgentSession, SubAgentSpec
 
     # Track every chat call so we can prove the LLM was never invoked.
     client = ScriptedClient({})
@@ -199,7 +199,7 @@ async def test_depth_cap_refuses_when_parent_is_already_at_max():
 async def test_depth_cap_allows_up_to_max():
     """parent_depth = MAX_SUBAGENT_DEPTH - 1 (=1) is the last level that's
     allowed to spawn -- the resulting child sits exactly at the cap."""
-    from miniclaudecode.subagent.runner import SubAgentSession, SubAgentSpec
+    from codelet.subagent.runner import SubAgentSession, SubAgentSpec
 
     client = ScriptedClient({"You are a SubAgent": [_text("ok at the edge")]})
 
@@ -237,7 +237,7 @@ async def test_two_tasks_in_one_turn_run_in_parallel_and_preserve_order():
         _text("summary-B"),
     ]
     client = ScriptedClient({
-        "miniClaudeCode, a lightweight": parent_responses,
+        "codelet, a lightweight": parent_responses,
         "You are a SubAgent": sub_responses,
     })
     parent = _make_parent(client)
@@ -267,7 +267,7 @@ async def test_subagent_allowed_tools_filters_registry():
     ]
     sub_responses = [_text("ok")]
     client = ScriptedClient({
-        "miniClaudeCode, a lightweight": parent_responses,
+        "codelet, a lightweight": parent_responses,
         "You are a SubAgent": sub_responses,
     })
     parent = _make_parent(client, MarkerTool())

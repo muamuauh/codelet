@@ -11,7 +11,7 @@ from .skills.loader import SkillIndex
 from .tools.base import ToolRegistry
 
 SYSTEM_PROMPT_TEMPLATE = """\
-You are miniClaudeCode, a lightweight AI coding assistant operating in the terminal.
+You are codelet, a lightweight AI coding assistant operating in the terminal.
 
 You have access to the following tools:
 {tool_list}

@@ -1,4 +1,4 @@
-# miniClaudeCode
+# codelet
 
 一个轻量级 AI 编码助手框架。核心是异步 agent loop + 工具系统 + 权限门控，外加一整套
 工程化能力：**SubAgent / 并行执行 / Skill 系统 / Hooks / 上下文自动压缩 / Token & 成本
@@ -31,8 +31,8 @@ Session 持久化 / Slash 命令模板 / Diff 预览**。
 ## 环境
 
 ```bash
-conda create -n miniClaudeCode python=3.10 -y
-conda activate miniClaudeCode
+conda create -n codelet python=3.10 -y
+conda activate codelet
 pip install -e ".[dev]"            # 本地开发
 # pip install -e ".[dev,openai,web]"  # P5 之后再启用
 ```
@@ -57,7 +57,7 @@ LLM_MODEL=deepseek-chat
 跑：
 
 ```bash
-python -m miniclaudecode "你好"
+python -m codelet "你好"
 ```
 
 不需要碰 `settings.json`，不需要 `--profile`。换一个中转就只改这三行。
@@ -68,7 +68,7 @@ python -m miniclaudecode "你好"
 ### 一次性传给 CLI（不写文件）
 
 ```bash
-python -m miniclaudecode \
+python -m codelet \
   --base-url https://api.deepseek.com/v1 \
   --api-key sk-xxx \
   --model deepseek-chat \
@@ -81,7 +81,7 @@ python -m miniclaudecode \
 ### 想要切来切去 → 命名 profile
 
 如果你常在多个 LLM 之间切，把它们放进
-[`.miniclaudecode/settings.json`](.miniclaudecode/settings.json) 的 `profiles`：
+[`.codelet/settings.json`](.codelet/settings.json) 的 `profiles`：
 
 ```json
 {
@@ -106,7 +106,7 @@ python -m miniclaudecode \
 - `api_key_env: "X"` → 从 `.env` / shell 里读 `X`（推荐，不把 secret 写进版本库）
 - `api_key: "sk-..."` → 直接写明文（self-contained，单文件可分发）
 
-切换：`python -m miniclaudecode --profile myproxy "..."`
+切换：`python -m codelet --profile myproxy "..."`
 
 ### 解析优先级
 
@@ -120,21 +120,21 @@ CLI flags  >  --profile X  >  settings.profile  >  LLM_*(env-driven)  >  "anthro
 
 ```bash
 # 交互式 REPL（用 .env 里的 LLM_* 三元组，或没设的话用 anthropic profile）
-python -m miniclaudecode
+python -m codelet
 
 # 一次性 prompt
-python -m miniclaudecode "在当前目录找出所有 TODO 注释"
+python -m codelet "在当前目录找出所有 TODO 注释"
 
 # 切预置 profile
-python -m miniclaudecode --profile deepseek
-python -m miniclaudecode --profile openai-gpt4o
-python -m miniclaudecode --profile ollama-local
+python -m codelet --profile deepseek
+python -m codelet --profile openai-gpt4o
+python -m codelet --profile ollama-local
 
 # 切换权限模式
-python -m miniclaudecode --mode auto "..."
+python -m codelet --mode auto "..."
 
 # 恢复上次会话
-python -m miniclaudecode --resume 20260503-153045-ab12
+python -m codelet --resume 20260503-153045-ab12
 ```
 
 REPL 内置命令：
@@ -143,13 +143,13 @@ REPL 内置命令：
 `/mode [ask|auto|plan]` `/help` `/quit`。
 
 用户自定义命令（项目里已带 `/audit` 示例，见
-[.miniclaudecode/commands/audit.md](.miniclaudecode/commands/audit.md)）放在
-`./.miniclaudecode/commands/<name>.md` 或 `~/.miniclaudecode/commands/<name>.md`，
+[.codelet/commands/audit.md](.codelet/commands/audit.md)）放在
+`./.codelet/commands/<name>.md` 或 `~/.codelet/commands/<name>.md`，
 通过 `/<name> args` 调用。命令体支持 `{args}` `{1}` `{2}` 占位。
 
 ## 预置的 profiles 速查
 
-[`.miniclaudecode/settings.json`](.miniclaudecode/settings.json) 里已经塞好这些
+[`.codelet/settings.json`](.codelet/settings.json) 里已经塞好这些
 （`--profile <name>` 直接用，记得 `.env` 里填对应 key）：
 
 | profile | provider | base_url | model |
@@ -170,8 +170,8 @@ agent loop 完全感知不到差异。
 
 ## 配置（settings.json，P4）
 
-分层加载：`~/.miniclaudecode/settings.json`（用户级）合并 `./.miniclaudecode/settings.json`（项目级，覆盖标量、按 model 合并 pricing、追加 hooks）。
-项目里已带示例 [`.miniclaudecode/settings.json`](.miniclaudecode/settings.json)。
+分层加载：`~/.codelet/settings.json`（用户级）合并 `./.codelet/settings.json`（项目级，覆盖标量、按 model 合并 pricing、追加 hooks）。
+项目里已带示例 [`.codelet/settings.json`](.codelet/settings.json)。
 
 ```json
 {
@@ -225,7 +225,7 @@ REPL 每个 turn 末尾自动渲染面板；可用 `--no-telemetry` 关掉，或
 
 ## Skill 系统
 
-放在 `./.miniclaudecode/skills/*.md`（项目级，覆盖用户级）或 `~/.miniclaudecode/skills/*.md`（用户级），格式：
+放在 `./.codelet/skills/*.md`（项目级，覆盖用户级）或 `~/.codelet/skills/*.md`（用户级），格式：
 
 ```markdown
 ---
@@ -239,7 +239,7 @@ allowed_tools: [glob, grep, read_file]
 
 启动时只把 `name: description` 单行索引塞进 system prompt（最多 30 条、每行
 ≤80 字符），完整 body 由 `skill` 工具按需取出 — 冷上下文不会因 skill 多而膨胀。
-项目里已带一个示例 [`.miniclaudecode/skills/python-review.md`](.miniclaudecode/skills/python-review.md)。
+项目里已带一个示例 [`.codelet/skills/python-review.md`](.codelet/skills/python-review.md)。
 
 ## SubAgent + 并行 Task
 
@@ -294,7 +294,7 @@ pytest -q          # 149 passed
 ## 目录结构（P1–P6）
 
 ```
-miniclaudecode/
+codelet/
 ├── agent_loop.py        # async 主循环 + 并行 dispatch + hooks + 压缩 + telemetry + diff 确认 + 流式
 ├── cli.py               # Rich REPL + .env/settings 加载 + slash 命令 + /resume + spinner
 ├── config.py            # Config + (provider, model, base_url, api_key) 四元组 + profile_name
@@ -337,7 +337,7 @@ evals/                       # P6 执行式评测
 
 ## Session 持久化（P5）
 
-每个 turn 结束自动写到 `~/.miniclaudecode/sessions/{id}.json`（用 `tmp + os.replace`
+每个 turn 结束自动写到 `~/.codelet/sessions/{id}.json`（用 `tmp + os.replace`
 保证原子性，被中断不会留半成品）。
 - `/sessions` 列出最近 30 条
 - `/resume <id>` 在当前 REPL 里恢复（消息、todo、telemetry 从快照重建；工具/hook/skill

@@ -117,7 +117,7 @@ PostToolUse       → 仅日志，不阻断（工具已经跑完了）
 
 1. **跨语言生态**：用户的安全审计脚本可能是 Go / Bash / Lua / 任何语言。shell 命令是最低公约数。
 2. **进程隔离**：hook 崩溃不能拖死主进程。subprocess + 30s timeout 自动隔离。
-3. **零代码加载**：写个 `.miniclaudecode/settings.json` 就生效，不需要让用户写 Python 模块、考虑 import 顺序、担心 venv。
+3. **零代码加载**：写个 `.codelet/settings.json` 就生效，不需要让用户写 Python 模块、考虑 import 顺序、担心 venv。
 
 代价：每次 hook 调用 fork 一个 subprocess，开销比 in-process callback 高。但 hook 不是热路径，可以接受。
 
@@ -154,7 +154,7 @@ LLM_API_KEY=sk-xxx
 LLM_MODEL=deepseek-chat
 ```
 
-实现位置 [settings.py](../miniclaudecode/settings.py) `resolve_profile`：
+实现位置 [settings.py](../codelet/settings.py) `resolve_profile`：
 
 ```python
 if name is None:
@@ -203,7 +203,7 @@ async def _dispatch_parallel(self, tool_calls):
 
 ### Q10. SubAgent 怎么保证父级对话不泄漏？
 
-实现 ([subagent/runner.py](../miniclaudecode/subagent/runner.py))：
+实现 ([subagent/runner.py](../codelet/subagent/runner.py))：
 
 ```python
 child = AgentLoop(...)                                       # 共享 client/registry/skill
@@ -237,7 +237,7 @@ class TaskTool(Tool):
 
 如果 subagent 直接复用父级的 `TaskTool` 实例，subagent 想再 spawn 时读到的是**父级的 depth=0** 而不是自己的 depth=1，深度上限失效。同理 `TodoWriteTool` 持有 store 引用，不重绑会写到父级的 todo store。
 
-解决（[agent_loop.py](../miniclaudecode/agent_loop.py) `_wire_dynamic_tools`）：
+解决（[agent_loop.py](../codelet/agent_loop.py) `_wire_dynamic_tools`）：
 
 ```python
 def maybe(name, factory):
@@ -252,7 +252,7 @@ maybe("todo_write", lambda: TodoWriteTool(self.todo_store))
 
 每个 AgentLoop 实例（包括 subagent）init 时都会剥离父级注册的 task/todo，重绑到自己。
 
-为了不污染父级的 registry，subagent runner 在传 registry 给 child 之前做了 shallow copy（[runner.py](../miniclaudecode/subagent/runner.py) `_shallow_copy_registry`）：tool 实例本身共享，但容器是新的，subagent 的 unregister 不会影响父级。
+为了不污染父级的 registry，subagent runner 在传 registry 给 child 之前做了 shallow copy（[runner.py](../codelet/subagent/runner.py) `_shallow_copy_registry`）：tool 实例本身共享，但容器是新的，subagent 的 unregister 不会影响父级。
 
 ---
 
@@ -263,7 +263,7 @@ maybe("todo_write", lambda: TodoWriteTool(self.todo_store))
 1. **信息丢失**：早期 user 决策（"我们用 Python 3.10"）丢了之后，后续 turn 可能 LLM 又重新问一遍
 2. **可能切坏 tool_use/tool_result 配对**：朴素截断不感知消息边界，容易把"工具调用"和它的"结果"切散，下一次 API 调用直接 400
 
-我的实现 ([context.py](../miniclaudecode/context.py))：
+我的实现 ([context.py](../codelet/context.py))：
 
 ```python
 head = self.messages[:1]                      # 第一条永远保留
@@ -354,7 +354,7 @@ except Exception:
 两条理由：
 
 - **可读性**：用框架代码量能从 ~3500 行降到 ~500 行，但读者看到的是"框架的 API 调用"而不是"agent 怎么实现"。本项目目标之一是把每一处设计讲清楚（这是 docs/technical-details.md 存在的意义）。
-- **可控性**：遇到 OpenAI 兼容中转站的奇葩行为能直接改翻译层（[openai_compat.py](../miniclaudecode/llm/openai_compat.py) 那 6 个边界条件就是真踩出来的）而不是发 GitHub issue 等三个月。框架版本升级也不会让自己的代码烂掉。
+- **可控性**：遇到 OpenAI 兼容中转站的奇葩行为能直接改翻译层（[openai_compat.py](../codelet/llm/openai_compat.py) 那 6 个边界条件就是真踩出来的）而不是发 GitHub issue 等三个月。框架版本升级也不会让自己的代码烂掉。
 
 副作用：测试不依赖外部框架，跑得飞快（131 个测试 1.4 秒）。
 
@@ -475,7 +475,7 @@ def load_env_files(...):
 
 最少改动路径：
 
-1. 写 `llm/cohere_client.py`，实现 `LLMClient` ABC，做 Cohere 风格 ↔ Anthropic-shaped 的双向翻译（参考 [openai_compat.py](../miniclaudecode/llm/openai_compat.py)）
+1. 写 `llm/cohere_client.py`，实现 `LLMClient` ABC，做 Cohere 风格 ↔ Anthropic-shaped 的双向翻译（参考 [openai_compat.py](../codelet/llm/openai_compat.py)）
 2. 在 `LLMProvider` enum 加 `COHERE = "cohere"`
 3. `factory.build_client` 加个分支
 4. settings.json 里加一个 profile
@@ -510,8 +510,8 @@ agent_loop / context / 任何工具都不用动。
 最少改动：
 
 ```python
-from miniclaudecode import AgentLoop, Config
-from miniclaudecode.llm import AnthropicClient
+from codelet import AgentLoop, Config
+from codelet.llm import AnthropicClient
 
 agent = AgentLoop(
     config=Config(model="claude-sonnet-4-5", api_key="sk-..."),
@@ -520,7 +520,7 @@ agent = AgentLoop(
 result = await agent.run_async("hello")
 ```
 
-这本来就能跑（CLI 只是 builder + REPL）。我会把 `miniclaudecode/__init__.py` 的导出整理一下，加个 `setup.py` console_scripts 入口让 `pip install` 后能 `mcc` 命令调用。
+这本来就能跑（CLI 只是 builder + REPL）。我会把 `codelet/__init__.py` 的导出整理一下，加个 `setup.py` console_scripts 入口让 `pip install` 后能 `mcc` 命令调用。
 
 ---
 
@@ -584,7 +584,7 @@ result = await agent.run_async("hello")
 **坏处**：
 
 - Phase 边界有时候被我自己破坏（比如 P1 就引入了 LLMClient 抽象——技术上是 P5 才需要的）。这种"提前抽象"是有意识的，但确实让 P1 比纯净版多 ~150 行
-- 严格按 phase 走可能错过更好的全局最优解。比如 P3 加 subagent 时如果一并把"subagent 共享 telemetry"想到了，P4 就不用回头改 [task_tool.py](../miniclaudecode/tools/task_tool.py) 了
+- 严格按 phase 走可能错过更好的全局最优解。比如 P3 加 subagent 时如果一并把"subagent 共享 telemetry"想到了，P4 就不用回头改 [task_tool.py](../codelet/tools/task_tool.py) 了
 
 总体看，分阶段推进的复利收益远大于成本。
 
@@ -597,9 +597,9 @@ result = await agent.run_async("hello")
 1. [README.md](../README.md) — 5 分钟看懂项目能干什么
 2. [docs/architecture.md](architecture.md) — 模块图 + 责任划分
 3. [docs/flow-diagrams.md](flow-diagrams.md) — 一个 turn 怎么跑、subagent 怎么 fork
-4. [miniclaudecode/agent_loop.py](../miniclaudecode/agent_loop.py) 全文 — 核心循环就这一个文件，读完心里有数
+4. [codelet/agent_loop.py](../codelet/agent_loop.py) 全文 — 核心循环就这一个文件，读完心里有数
 5. [docs/technical-details.md](technical-details.md) — 哪些地方有坑，挑感兴趣的章节
-6. 想加新 provider 看 [llm/openai_compat.py](../miniclaudecode/llm/openai_compat.py) 抄一份
+6. 想加新 provider 看 [llm/openai_compat.py](../codelet/llm/openai_compat.py) 抄一份
 
 测试是文档：每个测试文件 docstring 都说明了"在防御什么 invariant"。读测试比读源码更快理解关键约束。
 
@@ -609,9 +609,9 @@ result = await agent.run_async("hello")
 
 三件事：
 
-1. **Anthropic API 要求 tool_use / tool_result 顺序严格一致**。不要乱动 [`_dispatch_parallel`](../miniclaudecode/agent_loop.py)。如果将来真有原因要改，先看 [test_parallel_dispatch.py](../tests/test_parallel_dispatch.py)。
+1. **Anthropic API 要求 tool_use / tool_result 顺序严格一致**。不要乱动 [`_dispatch_parallel`](../codelet/agent_loop.py)。如果将来真有原因要改，先看 [test_parallel_dispatch.py](../tests/test_parallel_dispatch.py)。
 
-2. **subagent 的 task / todo_write 工具**必须重绑到 child loop。不要"为了节省内存复用父级实例"——会破坏深度上限和 todo 隔离。看 [`_wire_dynamic_tools`](../miniclaudecode/agent_loop.py)。
+2. **subagent 的 task / todo_write 工具**必须重绑到 child loop。不要"为了节省内存复用父级实例"——会破坏深度上限和 todo 隔离。看 [`_wire_dynamic_tools`](../codelet/agent_loop.py)。
 
 3. **OpenAI 兼容客户端的 6 个边界条件**全在 [test_openai_compat.py](../tests/test_openai_compat.py)。新加 provider 跑这套测试，全过基本就能用。
 

@@ -11,8 +11,8 @@ Skill files are markdown with YAML frontmatter:
     # body...
 
 Discovery order (project overrides user):
-    1. ./.miniclaudecode/skills/*.md          (project-local)
-    2. ~/.miniclaudecode/skills/*.md          (user-global)
+    1. ./.codelet/skills/*.md          (project-local)
+    2. ~/.codelet/skills/*.md          (user-global)
 
 Surfacing strategy: only `name: description` lines go into the system prompt
 (see `SkillIndex.index_summary`). The full body stays behind the `Skill` tool
@@ -125,7 +125,7 @@ def load_skills(
     index = SkillIndex()
 
     if user_dir is None:
-        user_dir = Path.home() / ".miniclaudecode" / "skills"
+        user_dir = Path.home() / ".codelet" / "skills"
     else:
         user_dir = Path(user_dir)
 
@@ -133,7 +133,7 @@ def load_skills(
         project_dir = Path.cwd()
     else:
         project_dir = Path(project_dir)
-    project_skills = project_dir / ".miniclaudecode" / "skills"
+    project_skills = project_dir / ".codelet" / "skills"
 
     for directory in (user_dir, project_skills):
         if not directory.is_dir():

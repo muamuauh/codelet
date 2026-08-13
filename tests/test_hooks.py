@@ -13,11 +13,11 @@ from typing import Any
 
 import pytest
 
-from miniclaudecode.agent_loop import AgentLoop, PromptBlocked
-from miniclaudecode.config import Config, PermissionMode
-from miniclaudecode.hooks.runner import HookOutcome, HookRunner, HookSpec
-from miniclaudecode.llm.base import LLMClient, LLMResponse, ToolCall
-from miniclaudecode.tools.base import Tool, ToolRegistry, ToolResult
+from codelet.agent_loop import AgentLoop, PromptBlocked
+from codelet.config import Config, PermissionMode
+from codelet.hooks.runner import HookOutcome, HookRunner, HookSpec
+from codelet.llm.base import LLMClient, LLMResponse, ToolCall
+from codelet.tools.base import Tool, ToolRegistry, ToolResult
 
 
 PY = sys.executable  # absolute path to current interpreter, works on Windows + POSIX

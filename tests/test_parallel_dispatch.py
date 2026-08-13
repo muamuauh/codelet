@@ -15,10 +15,10 @@ from typing import Any
 
 import pytest
 
-from miniclaudecode.agent_loop import AgentLoop
-from miniclaudecode.config import Config, PermissionMode
-from miniclaudecode.llm.base import LLMClient, LLMResponse, ToolCall
-from miniclaudecode.tools.base import Tool, ToolRegistry, ToolResult
+from codelet.agent_loop import AgentLoop
+from codelet.config import Config, PermissionMode
+from codelet.llm.base import LLMClient, LLMResponse, ToolCall
+from codelet.tools.base import Tool, ToolRegistry, ToolResult
 
 
 class ScriptedClient(LLMClient):

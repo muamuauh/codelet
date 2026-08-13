@@ -8,7 +8,7 @@ reports pass-rate, tokens, and cost.
 ## Run
 
 ```powershell
-conda activate miniClaudeCode
+conda activate codelet
 $env:PYTHONUTF8="1"
 
 python -m evals.runner                      # run every task in evals/tasks

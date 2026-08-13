@@ -1,8 +1,8 @@
 """User-defined slash commands.
 
 Markdown files at:
-    ./.miniclaudecode/commands/<name>.md     (project-local, overrides user)
-    ~/.miniclaudecode/commands/<name>.md     (user-global)
+    ./.codelet/commands/<name>.md     (project-local, overrides user)
+    ~/.codelet/commands/<name>.md     (user-global)
 
 Optional YAML frontmatter (description shown in /help). Body is the prompt
 template that gets injected when the user types `/<name> [args]` in the REPL.
@@ -90,7 +90,7 @@ def load_commands(
     index = SlashCommandIndex()
 
     if user_dir is None:
-        user_dir = Path.home() / ".miniclaudecode" / "commands"
+        user_dir = Path.home() / ".codelet" / "commands"
     else:
         user_dir = Path(user_dir)
 
@@ -98,7 +98,7 @@ def load_commands(
         project_dir = Path.cwd()
     else:
         project_dir = Path(project_dir)
-    project_commands = project_dir / ".miniclaudecode" / "commands"
+    project_commands = project_dir / ".codelet" / "commands"
 
     for directory in (user_dir, project_commands):
         if not directory.is_dir():

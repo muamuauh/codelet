@@ -1,8 +1,8 @@
 """System prompt builder tests."""
 from __future__ import annotations
 
-from miniclaudecode.system_prompt import build_system_prompt
-from miniclaudecode.tools.base import ToolRegistry
+from codelet.system_prompt import build_system_prompt
+from codelet.tools.base import ToolRegistry
 
 
 def test_prompt_contains_tool_names():

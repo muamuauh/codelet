@@ -1,4 +1,4 @@
-"""SWE-bench Lite adapter for miniClaudeCode.
+"""SWE-bench Lite adapter for codelet.
 
 Two-stage, following the standard SWE-bench split:
 

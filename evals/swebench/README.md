@@ -1,6 +1,6 @@
 # SWE-bench Lite adapter
 
-Run miniClaudeCode against [SWE-bench Lite](https://www.swebench.com/) — 300 real
+Run codelet against [SWE-bench Lite](https://www.swebench.com/) — 300 real
 GitHub issues from popular Python projects. The agent must produce a code patch
 that makes the hidden tests pass.
 
@@ -26,7 +26,7 @@ setup required to produce a patch.
 ## Prerequisites
 
 ```powershell
-conda activate miniClaudeCode
+conda activate codelet
 pip install datasets          # to load the dataset (stage 1)
 pip install swebench          # to score (stage 2) — also needs Docker running
 ```
@@ -52,7 +52,7 @@ python -m evals.swebench.run_swebench --limit 10 --profile deepseek --max-turns 
 Output: `evals/swebench/out/predictions.jsonl`, one line per instance:
 
 ```json
-{"instance_id": "...", "model_name_or_path": "miniclaudecode", "model_patch": "diff --git ..."}
+{"instance_id": "...", "model_name_or_path": "codelet", "model_patch": "diff --git ..."}
 ```
 
 (Extra `_`-prefixed fields — tokens, calls, errors — are diagnostics the official
@@ -109,7 +109,7 @@ export HTTPS_PROXY=http://127.0.0.1:7897 HTTP_PROXY=http://127.0.0.1:7897
 cd ~
 ~/sweb-venv/bin/python -m swebench.harness.run_evaluation \
   --dataset_name princeton-nlp/SWE-bench_Lite \
-  --predictions_path /mnt/e/codes/miniClaudeCode/evals/swebench/out/predictions.jsonl \
+  --predictions_path /mnt/e/codes/codelet/evals/swebench/out/predictions.jsonl \
   --max_workers 4 --run_id mcc-run --cache_level instance
 ```
 
@@ -193,10 +193,10 @@ statistically significant, but a real, reproducible signal:
 | run | agent / model | resolved | avg in-tok/inst | notes |
 |---|---|---|---|---|
 | gold-gate | gold reference | 1/1 | — | proves the local scoring chain works |
-| agent-3 | miniclaudecode · qwen3.7-max | 2/3 | — | astropy-12907 ✅, 14182 ✅, 14365 ❌ |
-| agent-10 | miniclaudecode · qwen3.7-max | 5/10 (50%) | 169k | first 10 of the dataset (6 astropy + 4 django) |
-| kimi-10 | miniclaudecode · kimi-k3 | 9/10 (90%) | 331k | same 10 instances; only missed astropy-7746 |
-| **kimi-50** | miniclaudecode · kimi-k3 | **42/50 (84%)** | 321k | first 50 (6 astropy + 44 django); 5 empty patches count as unresolved (93.3% of the 45 scored) |
+| agent-3 | codelet · qwen3.7-max | 2/3 | — | astropy-12907 ✅, 14182 ✅, 14365 ❌ |
+| agent-10 | codelet · qwen3.7-max | 5/10 (50%) | 169k | first 10 of the dataset (6 astropy + 4 django) |
+| kimi-10 | codelet · kimi-k3 | 9/10 (90%) | 331k | same 10 instances; only missed astropy-7746 |
+| **kimi-50** | codelet · kimi-k3 | **42/50 (84%)** | 321k | first 50 (6 astropy + 44 django); 5 empty patches count as unresolved (93.3% of the 45 scored) |
 
 **At n=50, kimi-k3 holds up: 84%** (42/50) — close to its 90% on the 10-instance
 sample, so that number wasn't a fluke. Counting convention matters: 5 instances where

@@ -8,10 +8,10 @@ build/
 dist/
 .coverage
 *.log
-~/.miniclaudecode/sessions/
+~/.codelet/sessions/
 
 # Per-project session registry (machine-local; references global snapshots)
-.miniclaudecode/sessions.json
+.codelet/sessions.json
 
 # Eval run reports
 evals/reports/

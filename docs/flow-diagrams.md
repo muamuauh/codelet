@@ -23,8 +23,8 @@ sequenceDiagram
     participant SC as load_commands
     participant SS as SessionStore
 
-    U->>CLI: python -m miniclaudecode
-    CLI->>ENV: 读 .env / ~/.miniclaudecode/.env
+    U->>CLI: python -m codelet
+    CLI->>ENV: 读 .env / ~/.codelet/.env
     ENV-->>CLI: os.environ 已注入
     CLI->>SET: 合并 user + project settings.json
     SET-->>CLI: settings dict
@@ -306,7 +306,7 @@ sequenceDiagram
 
 ```mermaid
 flowchart LR
-    subgraph "miniClaudeCode 内部 (Anthropic-shaped)"
+    subgraph "codelet 内部 (Anthropic-shaped)"
         IN_MSG["messages: list[dict]<br/>{role, content: str | [blocks]}<br/>blocks: text / tool_use / tool_result"]
         IN_TOOLS["tools: [{name, description, input_schema}]"]
         IN_SYS["system: str"]

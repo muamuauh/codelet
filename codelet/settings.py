@@ -1,12 +1,12 @@
 """settings.json layered loader + .env loader + profile resolver (P5).
 
 Discovery order for settings.json (project overrides user; both optional):
-    1. ~/.miniclaudecode/settings.json
-    2. ./.miniclaudecode/settings.json   (project)
+    1. ~/.codelet/settings.json
+    2. ./.codelet/settings.json   (project)
 
 Discovery order for .env files (project loaded first; shell env always wins):
     1. ./.env                            (project root)
-    2. ~/.miniclaudecode/.env
+    2. ~/.codelet/.env
 
 Schema (all fields optional):
     {
@@ -110,7 +110,7 @@ def load_env_files(
     else:
         project_dir = Path(project_dir)
     if user_dir is None:
-        user_dir = Path.home() / ".miniclaudecode"
+        user_dir = Path.home() / ".codelet"
     else:
         user_dir = Path(user_dir)
 
@@ -151,7 +151,7 @@ def load_settings(
 ) -> dict[str, Any]:
     """Load and merge user + project settings.json. Missing files are silently ignored."""
     if user_path is None:
-        user_path = Path.home() / ".miniclaudecode" / "settings.json"
+        user_path = Path.home() / ".codelet" / "settings.json"
     else:
         user_path = Path(user_path)
 
@@ -159,7 +159,7 @@ def load_settings(
         project_dir = Path.cwd()
     else:
         project_dir = Path(project_dir)
-    project_path = project_dir / ".miniclaudecode" / "settings.json"
+    project_path = project_dir / ".codelet" / "settings.json"
 
     user_cfg = _read_json(user_path)
     project_cfg = _read_json(project_path)

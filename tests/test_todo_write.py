@@ -1,7 +1,7 @@
 """TodoWrite tool tests."""
 from __future__ import annotations
 
-from miniclaudecode.tools.todo_write import TodoStore, TodoWriteTool
+from codelet.tools.todo_write import TodoStore, TodoWriteTool
 
 
 def test_replace_list_renders_table():

@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from miniclaudecode.settings import load_settings
+from codelet.settings import load_settings
 
 
 def _write(path: Path, data: dict) -> None:
@@ -21,7 +21,7 @@ def test_project_overrides_user_for_scalars(tmp_path: Path):
     user = tmp_path / "user.json"
     project_dir = tmp_path / "p"
     _write(user, {"model": "user-model", "max_turns": 10})
-    _write(project_dir / ".miniclaudecode" / "settings.json", {"model": "project-model"})
+    _write(project_dir / ".codelet" / "settings.json", {"model": "project-model"})
 
     merged = load_settings(project_dir=project_dir, user_path=user)
     assert merged["model"] == "project-model"
@@ -32,7 +32,7 @@ def test_hooks_lists_compose_user_then_project(tmp_path: Path):
     user = tmp_path / "user.json"
     project_dir = tmp_path / "p"
     _write(user, {"hooks": {"PreToolUse": [{"matcher": "bash", "command": "u1"}]}})
-    _write(project_dir / ".miniclaudecode" / "settings.json", {
+    _write(project_dir / ".codelet" / "settings.json", {
         "hooks": {"PreToolUse": [{"matcher": "*", "command": "p1"}]},
     })
 
@@ -47,7 +47,7 @@ def test_pricing_dict_merges_per_model(tmp_path: Path):
     user = tmp_path / "user.json"
     project_dir = tmp_path / "p"
     _write(user, {"pricing": {"claude-sonnet-4-5": {"input": 3.0, "output": 15.0}}})
-    _write(project_dir / ".miniclaudecode" / "settings.json", {
+    _write(project_dir / ".codelet" / "settings.json", {
         "pricing": {"claude-haiku-4-5": {"input": 1.0, "output": 5.0}},
     })
 
@@ -58,7 +58,7 @@ def test_pricing_dict_merges_per_model(tmp_path: Path):
 
 def test_malformed_json_is_silently_ignored(tmp_path: Path):
     project_dir = tmp_path / "p"
-    bad = project_dir / ".miniclaudecode" / "settings.json"
+    bad = project_dir / ".codelet" / "settings.json"
     bad.parent.mkdir(parents=True)
     bad.write_text("{ not json", encoding="utf-8")
 

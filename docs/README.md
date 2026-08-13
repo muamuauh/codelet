@@ -10,7 +10,7 @@
 
 ## 推荐阅读顺序
 
-**新接手项目** → architecture → flow-diagrams → 主代码（[agent_loop.py](../miniclaudecode/agent_loop.py)）→ technical-details 挑感兴趣的章节
+**新接手项目** → architecture → flow-diagrams → 主代码（[agent_loop.py](../codelet/agent_loop.py)）→ technical-details 挑感兴趣的章节
 
 **面试 / 讲解项目** → interview-qa → 配合 architecture / technical-details 找细节
 
