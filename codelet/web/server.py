@@ -39,6 +39,7 @@ from ..persistence.session import (
 from ..settings import load_env_files, load_settings, resolve_profile
 from ..skills.loader import load_skills
 from ..slash.loader import expand_command, load_commands
+from ..system_prompt import build_system_prompt
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -199,9 +200,20 @@ class Connection:
             return
         await self._on_prompt(expand_command(user_cmd, rest))
 
+    def _refresh_system_prompt(self) -> None:
+        """Rebuild the system prompt so its mode + model lines reflect the current
+        config after a runtime mode/profile switch."""
+        self.agent.context.set_system_prompt(build_system_prompt(
+            self.agent.registry,
+            permission_mode=self.agent.config.permission_mode.value,
+            skill_index=self.agent.skill_index,
+            model=self.agent.config.model,
+        ))
+
     def _set_mode(self, mode: str) -> None:
         if mode in ("ask", "auto", "plan"):
             self.agent.config.permission_mode = PermissionMode(mode)
+            self._refresh_system_prompt()
             self.send({"type": "profile", **self._profile_data()})
 
     def _set_profile(self, name: str) -> None:
@@ -217,6 +229,7 @@ class Connection:
         cfg.api_key = prof.get("api_key") or cfg.api_key
         try:
             self.agent.client = build_client(cfg)
+            self._refresh_system_prompt()
             self.send({"type": "profile", **self._profile_data()})
         except Exception as exc:
             self.send({"type": "error", "message": f"profile switch failed: {exc}"})

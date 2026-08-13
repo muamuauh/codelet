@@ -11,7 +11,7 @@ from .skills.loader import SkillIndex
 from .tools.base import ToolRegistry
 
 SYSTEM_PROMPT_TEMPLATE = """\
-You are codelet, a lightweight AI coding assistant operating in the terminal.
+You are codelet, a lightweight AI coding assistant operating in the terminal.{model_section}
 
 You have access to the following tools:
 {tool_list}
@@ -43,10 +43,15 @@ def build_system_prompt(
     permission_mode: str = "ask",
     project_dir: str | None = None,
     skill_index: SkillIndex | None = None,
+    model: str | None = None,
 ) -> str:
     tool_list = "\n".join(
         f"- **{t.name}**: {t.description}" for t in registry.all_tools()
     )
+
+    # Tell the model which model is serving it, so "what model are you?" gets a
+    # truthful answer instead of a guess (the id lives in config, not the chat).
+    model_section = f"\nYou are currently served by the model `{model}`." if model else ""
 
     skill_section = ""
     if skill_index is not None:
@@ -63,6 +68,7 @@ def build_system_prompt(
         project_section = f"\n## Project Instructions (CLAUDE.md)\n\n{instructions}"
 
     return SYSTEM_PROMPT_TEMPLATE.format(
+        model_section=model_section,
         tool_list=tool_list,
         permission_mode=permission_mode.upper(),
         mode_description=MODE_DESCRIPTIONS.get(permission_mode, ""),

@@ -17,3 +17,15 @@ def test_prompt_reflects_mode():
     plan_prompt = build_system_prompt(reg, permission_mode="plan")
     assert "PLAN" in plan_prompt
     assert "read-only" in plan_prompt.lower()
+
+
+def test_prompt_names_the_model_when_given():
+    reg = ToolRegistry.default()
+    prompt = build_system_prompt(reg, model="qwen/qwen3.7-max")
+    assert "qwen/qwen3.7-max" in prompt
+    assert "served by the model" in prompt
+
+
+def test_prompt_omits_model_line_by_default():
+    prompt = build_system_prompt(ToolRegistry.default())
+    assert "served by the model" not in prompt

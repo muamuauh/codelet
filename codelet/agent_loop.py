@@ -200,6 +200,7 @@ class AgentLoop:
                 self.registry,
                 permission_mode=self.config.permission_mode.value,
                 skill_index=self.skill_index,
+                model=self.config.model,
             )
             self.context.set_system_prompt(system_prompt)
 
