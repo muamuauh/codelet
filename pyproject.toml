@@ -19,6 +19,9 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
+# Local web GUI: FastAPI app + uvicorn server. Launch with `python -m codelet.web`.
+# `httpx` (already a core dep) doubles as FastAPI's TestClient transport.
+web = ["fastapi>=0.110", "uvicorn>=0.29", "websockets>=12.0"]
 # SWE-bench Lite adapter: `datasets` loads the tasks (stage 1). Scoring (stage 2)
 # additionally needs `pip install swebench` + Docker -- kept out of here since it
 # pulls heavy deps and isn't importable in-process.
@@ -26,10 +29,14 @@ swebench = ["datasets>=2.16"]
 
 [project.scripts]
 codelet = "codelet.cli:main"
+codelet-web = "codelet.web.__main__:main"
 
 [tool.setuptools.packages.find]
 include = ["codelet*"]
 exclude = ["tests*", "docs*"]
+
+[tool.setuptools.package-data]
+"codelet.web" = ["static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

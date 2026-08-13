@@ -90,6 +90,28 @@ class Telemetry:
                     "output": float(table["output"]),
                 }
 
+    def snapshot(self) -> dict[str, Any]:
+        """Plain-data view of this-turn + cumulative usage, for non-Rich UIs
+        (the web GUI). Mirrors what `render_panel` shows, as numbers."""
+        per_turn_rows = self.turns[self.last_turn_start_index:]
+        turn = TurnUsage(0, 0, 0.0)
+        any_priced = False
+        for r in per_turn_rows:
+            turn.input_tokens += r.input_tokens
+            turn.output_tokens += r.output_tokens
+            if r.cost_usd is not None:
+                any_priced = True
+                turn.cost_usd = (turn.cost_usd or 0.0) + r.cost_usd
+        if not any_priced:
+            turn.cost_usd = None
+        cum = self.cumulative
+        return {
+            "turn": {"input_tokens": turn.input_tokens, "output_tokens": turn.output_tokens,
+                     "cost_usd": turn.cost_usd},
+            "session": {"input_tokens": cum.input_tokens, "output_tokens": cum.output_tokens,
+                        "cost_usd": cum.cost_usd},
+        }
+
     def render_panel(self) -> Panel:
         """Build a Rich panel summarizing this user turn + cumulative session.
 

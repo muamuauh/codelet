@@ -23,15 +23,18 @@ Public API:
 from __future__ import annotations
 
 import asyncio
+import inspect
 import random
 import time
-from typing import Any, Callable
+from contextlib import contextmanager
+from typing import Any, Awaitable, Callable, Iterator, Union
 
 from rich.console import Console
 from rich.syntax import Syntax
 
 from .config import Config, PermissionMode
 from .context import ConversationContext
+from .events import AgentSink, NullSink, Status
 from .hooks.runner import HookRunner
 from .llm.base import LLMClient, LLMResponse, ToolCall
 from .llm.factory import build_client
@@ -46,6 +49,61 @@ from .tools.todo_write import TodoStore, TodoWriteTool
 
 # Tools that should pop a diff preview + y/n confirm in ASK mode.
 _DIFF_CONFIRM_TOOLS = {"write_file", "edit_file"}
+
+# A diff-confirm callback may be sync (CLI y/N prompt) or async (web round-trip).
+ConfirmCallback = Callable[[str, str], Union[bool, Awaitable[bool]]]
+
+
+class RichSink:
+    """Default sink: writes the loop's progress to a Rich console, reproducing
+    the terminal output the REPL has always produced."""
+
+    def __init__(self, console: Console) -> None:
+        self.console = console
+
+    @property
+    def wants_stream(self) -> bool:
+        # Stream token-by-token only into a real terminal; piped/captured output
+        # takes the single blocking call (keeps logs clean, matches old behavior).
+        return self.console.is_terminal
+
+    def text_delta(self, text: str) -> None:
+        # Model text is data, not Rich markup -- never let a stray "[" be parsed
+        # as a tag, and don't auto-highlight numbers/paths.
+        self.console.print(text, end="", markup=False, highlight=False, soft_wrap=True)
+
+    def text_block(self, text: str) -> None:
+        self.console.print(text, end="")
+
+    def stream_end(self) -> None:
+        self.console.print()  # terminate the streamed line
+
+    def tool_start(self, name: str, tool_input: dict[str, Any]) -> None:
+        preview = str(tool_input)
+        if len(preview) > 120:
+            preview = preview[:120] + "..."
+        self.console.print(f"\n[dim cyan][tool: {name}][/dim cyan] {preview}")
+
+    def tool_result(self, name: str, output: str, is_error: bool) -> None:
+        preview = output if len(output) <= 300 else output[:300] + "..."
+        status = "ERR" if is_error else "OK"
+        color = "red" if is_error else "green"
+        self.console.print(f"  [{color}]-> [{status}][/{color}] {preview}")
+
+    def notice(self, message: str, *, level: str = "info") -> None:
+        if level == "error":
+            self.console.print(f"  [red]-> {message}[/red]")
+        elif level == "warn":
+            self.console.print(f"  [yellow]-> {message}[/yellow]")
+        elif level == "dim":
+            self.console.print(f"[dim yellow][{message}][/dim yellow]")
+        else:
+            self.console.print(message)
+
+    @contextmanager
+    def thinking(self) -> Iterator[Status]:
+        with self.console.status("[dim]…[/dim]", spinner="dots") as status:
+            yield status
 
 # Playful status words shown while waiting for the first streamed token.
 _SPINNER_WORDS = (
@@ -66,12 +124,13 @@ class AgentLoop:
         registry: ToolRegistry | None = None,
         client: LLMClient | None = None,
         console: Console | None = None,
+        sink: AgentSink | None = None,
         skill_index: SkillIndex | None = None,
         todo_store: TodoStore | None = None,
         allowed_tools: tuple[str, ...] | None = None,
         hook_runner: HookRunner | None = None,
         telemetry: Telemetry | None = None,
-        confirm_callback: "Callable[[str, str], bool] | None" = None,
+        confirm_callback: "ConfirmCallback | None" = None,
         _is_subagent: bool = False,
     ) -> None:
         self.config = config or Config()
@@ -81,9 +140,15 @@ class AgentLoop:
         self.client = client or build_client(self.config)
         self.console = console or Console()
 
+        # Where progress is shown. Default reproduces the terminal REPL output;
+        # the web server injects a sink that serializes events to a WebSocket.
+        # `wants_stream` (per sink) decides token streaming vs one blocking call.
+        self._sink: AgentSink = sink if sink is not None else RichSink(self.console)
+
         # Stream assistant text live (+ spinner). Off for subagents -- their
         # output isn't shown to the user, and concurrent subagents would
-        # interleave on the console. Also skipped at call time for non-TTY output.
+        # interleave on the console. Also skipped at call time when the sink
+        # doesn't want deltas (non-TTY terminals, headless).
         self._stream = (not _is_subagent) and getattr(self.config, "stream", True)
 
         # Skills: project-local + user-global. Loaded once; SubAgentSession
@@ -186,7 +251,7 @@ class AgentLoop:
                 await self.context.compact_if_needed(self.client)
             except Exception as exc:
                 # A failing summarizer must NOT kill the agent. Log and move on.
-                self.console.print(f"[dim yellow][compaction skipped: {exc}][/dim yellow]")
+                self._sink.notice(f"compaction skipped: {exc}", level="dim")
         else:
             if not final_text:
                 final_text = "(max turns reached without a final response)"
@@ -227,7 +292,7 @@ class AgentLoop:
         """
         # The SDK call is sync; offload to a worker thread so we don't block the
         # event loop (and so the spinner / stream consumer can run concurrently).
-        if not self._stream or not self.console.is_terminal:
+        if not self._stream or not self._sink.wants_stream:
             response = await asyncio.to_thread(self._chat_blocking)
             self._record_usage(response)
             return response, False
@@ -250,15 +315,15 @@ class AgentLoop:
         first = await self._spin_until_first_token(queue)
         printed = False
         if first is not None:
-            self._print_stream_text(first)
+            self._sink.text_delta(first)
             printed = True
             while True:
                 item = await queue.get()
                 if item is None:
                     break
-                self._print_stream_text(item)
+                self._sink.text_delta(item)
         if printed:
-            self.console.print()  # terminate the streamed line
+            self._sink.stream_end()
 
         response = await task
         self._record_usage(response)
@@ -279,11 +344,13 @@ class AgentLoop:
             self.telemetry.record_chat(self.config.model, response.usage)
 
     async def _spin_until_first_token(self, queue: "asyncio.Queue[str | None]") -> str | None:
-        """Show a spinner with a rotating word until the first queue item lands.
-        Returns that item (a text delta, or None if the turn produced no text)."""
+        """Show a "thinking" status with a rotating word until the first queue item
+        lands. Returns that item (a text delta, or None if the turn produced no text).
+        The status is owned by the sink -- a no-op for headless/web sinks."""
         start = time.monotonic()
         word = random.choice(_SPINNER_WORDS)
-        with self.console.status(f"[dim]{word}…[/dim]", spinner="dots") as status:
+        with self._sink.thinking() as status:
+            status.update(f"[dim]{word}…[/dim]")
             while True:
                 try:
                     return await asyncio.wait_for(queue.get(), timeout=2.5)
@@ -292,22 +359,14 @@ class AgentLoop:
                     elapsed = time.monotonic() - start
                     status.update(f"[dim]{word}… ({elapsed:.0f}s)[/dim]")
 
-    def _print_stream_text(self, text: str) -> None:
-        # Model text is data, not Rich markup -- never let a stray "[" be parsed
-        # as a tag, and don't auto-highlight numbers/paths.
-        self.console.print(text, end="", markup=False, highlight=False, soft_wrap=True)
-
     def _render_response(self, response: LLMResponse, streamed: bool = False) -> None:
         for block in response.raw_content:
             if block["type"] == "text":
                 if streamed:
-                    continue  # already printed live during streaming
-                self.console.print(block["text"], end="")
+                    continue  # already emitted live during streaming
+                self._sink.text_block(block["text"])
             elif block["type"] == "tool_use":
-                preview = str(block.get("input", ""))
-                if len(preview) > 120:
-                    preview = preview[:120] + "..."
-                self.console.print(f"\n[dim cyan][tool: {block['name']}][/dim cyan] {preview}")
+                self._sink.tool_start(block["name"], block.get("input") or {})
 
     async def _dispatch_parallel(self, tool_calls: list[ToolCall]) -> list[dict[str, Any]]:
         """Run all tool_use blocks concurrently; emit results in tool_use order.
@@ -354,18 +413,19 @@ class AgentLoop:
             })
             if outcome.blocked:
                 msg = outcome.block_reason or "PreToolUse hook blocked execution"
-                self.console.print(f"  [red]-> [hook block] {msg}[/red]")
+                self._sink.notice(f"[hook block] {msg}", level="error")
                 return self._error_result(call.id, f"PreToolUse blocked: {msg}")
             if "tool_input" in outcome.overrides and isinstance(outcome.overrides["tool_input"], dict):
                 tool_input = outcome.overrides["tool_input"]
 
         denial = self.permission_gate.check(tool, tool_input)
         if denial is not None:
-            self.console.print(f"  [red]-> {denial.output}[/red]")
+            self._sink.notice(denial.output, level="error")
             return self._error_result(call.id, denial.output)
 
         # Diff preview + confirmation for destructive writes in ASK mode. The
         # callback is None for subagents and for tests that explicitly opt out.
+        # It may be sync (CLI y/N) or async (web round-trip) -- await if awaitable.
         if (
             self.config.permission_mode == PermissionMode.ASK
             and call.name in _DIFF_CONFIRM_TOOLS
@@ -373,8 +433,11 @@ class AgentLoop:
         ):
             preview = tool.preview_diff(tool_input)
             if preview:
-                if not self._confirm_callback(call.name, preview):
-                    self.console.print("  [yellow]-> rejected by user[/yellow]")
+                decision = self._confirm_callback(call.name, preview)
+                if inspect.isawaitable(decision):
+                    decision = await decision
+                if not decision:
+                    self._sink.notice("rejected by user", level="warn")
                     return self._error_result(call.id, "User rejected the proposed change.")
 
         try:
@@ -382,10 +445,7 @@ class AgentLoop:
         except Exception as exc:
             result = ToolResult(output=f"Tool raised: {exc}", is_error=True)
 
-        preview = result.output if len(result.output) <= 300 else result.output[:300] + "..."
-        status = "ERR" if result.is_error else "OK"
-        color = "red" if result.is_error else "green"
-        self.console.print(f"  [{color}]-> [{status}][/{color}] {preview}")
+        self._sink.tool_result(call.name, result.output, result.is_error)
 
         # PostToolUse: best-effort logging, never blocks the result.
         if self.hooks.has_hooks("PostToolUse"):

@@ -25,8 +25,9 @@ Session 持久化 / Slash 命令模板 / Diff 预览**。
 - [x] **P4** Hooks + Context 压缩 + Token/成本 Telemetry + settings.json 分层加载
 - [x] **P5** 多 provider profiles（Anthropic / OpenAI 兼容）+ `.env` 加载 + WebFetch + Session 持久化 + Slash 命令模板 + Diff 预览
 - [x] **P6** 实时 token 流式输出 + 等待 spinner + per-project session registry（分区 `/sessions`）+ 执行式 eval 框架 + SWE-bench Lite 适配器
+- [x] **P7** 本地 Web GUI（FastAPI + WebSocket + 原生前端）：流式聊天 + 工具卡片 + diff 审批 + 会话/画像/遥测，核心经 `AgentSink` 解耦
 
-测试：`149 passed`（`pytest -q`）。
+测试：`157 passed`（`pytest -q`）。
 
 ## 环境
 
@@ -146,6 +147,26 @@ REPL 内置命令：
 [.codelet/commands/audit.md](.codelet/commands/audit.md)）放在
 `./.codelet/commands/<name>.md` 或 `~/.codelet/commands/<name>.md`，
 通过 `/<name> args` 调用。命令体支持 `{args}` `{1}` `{2}` 占位。
+
+## Web GUI（图形界面，P7）
+
+一个本地 Web 界面,浏览器里聊天,和 REPL 同一套 `AgentLoop`:
+
+```bash
+pip install -e ".[web]"
+python -m codelet.web            # 打开 http://127.0.0.1:8000
+```
+
+- **流式输出**:token 实时逐字显示(WebSocket)
+- **工具可见**:每次工具调用渲染成卡片(参数 + 结果,按成功/失败着色)
+- **权限审批**:ASK 模式下 `write_file`/`edit_file` 弹 **diff 预览** + Approve/Reject;AUTO 模式直接执行。顶栏可实时切换
+- **会话/画像/遥测**:左侧栏列出本项目 + 最近会话(点击恢复);顶栏切 profile、看 token/成本
+- 纯原生 HTML/JS,无构建链;只绑 `127.0.0.1`(本地)
+
+实现上,核心 `AgentLoop` 通过一个极小的 [`events.py`](codelet/events.py) `AgentSink`
+把 UI 事件解耦出来:CLI 用 `RichSink`(终端输出不变),Web 用把事件序列化成
+WebSocket 帧的 sink。diff 审批的回调支持 async(浏览器点击才继续)。Web 层单独放在
+[`codelet/web/`](codelet/web/),不进核心的 ≤3000 行。
 
 ## 预置的 profiles 速查
 

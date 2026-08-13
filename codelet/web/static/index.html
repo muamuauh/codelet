@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>codelet</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div id="app">
+    <aside id="sidebar">
+      <div class="brand">codelet</div>
+
+      <section class="panel">
+        <h2>Sessions</h2>
+        <div class="sub">This project</div>
+        <ul id="sessions-project" class="list"></ul>
+        <div class="sub">Recent</div>
+        <ul id="sessions-global" class="list"></ul>
+      </section>
+
+      <details class="panel">
+        <summary>Tools</summary>
+        <ul id="tools" class="list"></ul>
+      </details>
+
+      <details class="panel">
+        <summary>Skills</summary>
+        <ul id="skills" class="list"></ul>
+      </details>
+    </aside>
+
+    <main id="main">
+      <header id="topbar">
+        <div class="ident">
+          <span id="provider-model" class="pm">—</span>
+          <span id="conn" class="dot" title="disconnected"></span>
+        </div>
+        <div class="controls">
+          <label class="mode">
+            mode
+            <select id="mode">
+              <option value="ask">ask</option>
+              <option value="auto">auto</option>
+              <option value="plan">plan</option>
+            </select>
+          </label>
+          <label class="mode">
+            profile
+            <select id="profile"></select>
+          </label>
+          <div id="telemetry" class="telemetry">
+            <span title="this turn">turn <b id="tel-turn">0</b></span>
+            <span title="session tokens (in/out)">session <b id="tel-session">0 / 0</b></span>
+            <span title="session cost"><b id="tel-cost">n/a</b></span>
+          </div>
+        </div>
+      </header>
+
+      <div id="transcript"></div>
+
+      <form id="composer">
+        <textarea id="input" rows="1" placeholder="Ask codelet…  (Enter to send, Shift+Enter for newline)"></textarea>
+        <button id="send" type="submit">Send</button>
+      </form>
+    </main>
+  </div>
+
+  <div id="modal" class="modal hidden">
+    <div class="modal-card">
+      <h3>Apply this change via <span id="modal-tool"></span>?</h3>
+      <pre id="modal-diff" class="diff"></pre>
+      <div class="modal-actions">
+        <button id="reject" class="btn-reject">Reject</button>
+        <button id="approve" class="btn-approve">Approve</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
