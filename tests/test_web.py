@@ -108,8 +108,18 @@ def test_browse_lists_visible_dirs(client, tmp_path):
     (tmp_path / ".hidden").mkdir()
     r = client.get("/api/browse", params={"path": str(tmp_path)}).json()
     assert r["path"] == str(tmp_path.resolve())
-    assert "sub1" in r["dirs"] and "sub2" in r["dirs"]
-    assert ".hidden" not in r["dirs"]
+    names = [e["name"] for e in r["entries"]]
+    assert "sub1" in names and "sub2" in names
+    assert ".hidden" not in names
+    # entries carry full paths (so drives/other roots are navigable)
+    assert all(e["path"].endswith(e["name"]) for e in r["entries"])
+
+
+def test_browse_drives_root(client):
+    r = client.get("/api/browse", params={"path": "::drives::"}).json()
+    assert r["is_root"] is True and r["parent"] is None
+    assert r["entries"]  # at least one drive/root
+    assert all(e["name"] == e["path"] for e in r["entries"])
 
 
 def test_ws_set_model(client):
@@ -122,10 +132,45 @@ def test_ws_set_model(client):
 
 def test_ws_new_conversation_clears(client):
     with client.websocket_connect("/ws") as ws:
-        _recv_until(ws, "workspace")
+        _recv_until(ws, "skills")  # drain connect frames: profile, workspace, tools, skills
         ws.send_json({"type": "new_conversation"})
-        kinds = {ws.receive_json()["type"] for _ in range(3)}
+        kinds = set()
+        for _ in range(5):
+            kinds.add(ws.receive_json()["type"])
+            if {"cleared", "profile", "workspace"}.issubset(kinds):
+                break
         assert {"cleared", "profile", "workspace"}.issubset(kinds)
+
+
+def test_ws_tool_toggle(client):
+    with client.websocket_connect("/ws") as ws:
+        tools = _recv_until(ws, "tools")["tools"]
+        assert tools and all("enabled" in t for t in tools)
+        name = tools[0]["name"]
+        ws.send_json({"type": "set_tool_enabled", "name": name, "enabled": False})
+        updated = _recv_until(ws, "tools")["tools"]
+        assert any(t["name"] == name and t["enabled"] is False for t in updated)
+
+
+def test_rename_and_delete_session(tmp_path):
+    import json as _json
+    from codelet.persistence.session import (
+        delete_session, list_project_sessions, record_project_session, rename_session,
+    )
+    base = tmp_path / "sessions"; base.mkdir()
+    proj = tmp_path / ".codelet"; proj.mkdir()
+    sid = "20260101-000000-ab"
+    (base / f"{sid}.json").write_text(
+        _json.dumps({"id": sid, "summary": "old title", "messages": []}), encoding="utf-8")
+    record_project_session(proj, session_id=sid, title="old title", updated_at="t", message_count=0)
+
+    rename_session(sid, "new title", base_dir=base, project_dir=proj)
+    assert list_project_sessions(proj)[0]["title"] == "new title"
+    assert _json.loads((base / f"{sid}.json").read_text())["summary"] == "new title"
+
+    delete_session(sid, base_dir=base, project_dir=proj)
+    assert not (base / f"{sid}.json").exists()
+    assert list_project_sessions(proj) == []
 
 
 def test_upload_saves_files(client, tmp_path):

@@ -52,18 +52,21 @@ class SkillIndex:
     def names(self) -> list[str]:
         return list(self.skills.keys())
 
-    def index_summary(self) -> str:
-        """One line per skill -- this is what the system prompt sees."""
-        if not self.skills:
+    def index_summary(self, exclude: "set[str] | None" = None) -> str:
+        """One line per skill -- this is what the system prompt sees.
+        `exclude` hides skills the user toggled off in the GUI."""
+        exclude = exclude or set()
+        visible = [s for s in self.skills.values() if s.name not in exclude]
+        if not visible:
             return ""
         lines: list[str] = []
-        for skill in list(self.skills.values())[: self.max_in_index]:
+        for skill in visible[: self.max_in_index]:
             desc = skill.description.replace("\n", " ").strip()
             if len(desc) > 80:
                 desc = desc[:77] + "..."
             lines.append(f"- {skill.name}: {desc}")
-        if len(self.skills) > self.max_in_index:
-            lines.append(f"- (... {len(self.skills) - self.max_in_index} more skills truncated)")
+        if len(visible) > self.max_in_index:
+            lines.append(f"- (... {len(visible) - self.max_in_index} more skills truncated)")
         return "\n".join(lines)
 
 

@@ -93,11 +93,18 @@ def test_auto_mode_switch_skips_approval(monkeypatch, tmp_path):
     client = _client(monkeypatch, tmp_path,
                      [_tool_use(3, target, "auto"), _text("done")])
     with client.websocket_connect("/ws") as ws:
-        assert ws.receive_json()["type"] == "profile"
-        assert ws.receive_json()["type"] == "workspace"  # sent on connect
+        # drain connect frames (profile, workspace, tools, skills)
+        for _ in range(6):
+            if ws.receive_json()["type"] == "skills":
+                break
         ws.send_json({"type": "set_mode", "mode": "auto"})
-        prof = ws.receive_json()
-        assert prof["type"] == "profile" and prof["mode"] == "auto"
+        prof = None
+        for _ in range(6):
+            f = ws.receive_json()
+            if f["type"] == "profile":
+                prof = f
+                break
+        assert prof is not None and prof["mode"] == "auto"
         ws.send_json({"type": "prompt", "text": "write it"})
         frames = _drain(ws)  # no approval handler -> there must be no request
     assert not any(f["type"] == "permission_request" for f in frames)

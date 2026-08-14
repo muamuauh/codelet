@@ -45,6 +45,7 @@ def build_system_prompt(
     skill_index: SkillIndex | None = None,
     model: str | None = None,
     sections: list[str] | None = None,
+    disabled_skills: "set[str] | None" = None,
 ) -> str:
     tool_list = "\n".join(
         f"- **{t.name}**: {t.description}" for t in registry.all_tools()
@@ -56,7 +57,7 @@ def build_system_prompt(
 
     skill_section = ""
     if skill_index is not None:
-        summary = skill_index.index_summary()
+        summary = skill_index.index_summary(exclude=disabled_skills)
         if summary:
             skill_section = (
                 "\n## Skills available (fetch on demand via the `skill` tool)\n\n"

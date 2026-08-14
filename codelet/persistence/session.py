@@ -140,6 +140,38 @@ def list_sessions(base_dir: Path | None = None) -> list[dict[str, Any]]:
     return out
 
 
+def rename_session(session_id: str, title: str, *, base_dir: Path | None = None,
+                   project_dir: Path | None = None) -> None:
+    """Retitle a session: update the snapshot's summary + the project registry."""
+    base_dir = base_dir or SESSION_DIR
+    path = base_dir / f"{session_id}.json"
+    if path.exists():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            data["summary"] = title
+            _write_atomic(path, data)
+        except (OSError, json.JSONDecodeError):
+            pass
+    reg = _read_registry(project_dir)
+    if isinstance(reg.get(session_id), dict):
+        reg[session_id]["title"] = title
+        _write_atomic(_registry_path(project_dir), reg)
+
+
+def delete_session(session_id: str, *, base_dir: Path | None = None,
+                   project_dir: Path | None = None) -> None:
+    """Remove a session snapshot and its project-registry entry."""
+    base_dir = base_dir or SESSION_DIR
+    try:
+        (base_dir / f"{session_id}.json").unlink()
+    except OSError:
+        pass
+    reg = _read_registry(project_dir)
+    if session_id in reg:
+        del reg[session_id]
+        _write_atomic(_registry_path(project_dir), reg)
+
+
 # ---------- project-local session registry ----------
 
 def _project_dir_or_cwd(project_dir: Path | None) -> Path:

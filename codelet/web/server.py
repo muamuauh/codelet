@@ -35,9 +35,11 @@ from ..config import LLMProvider, PermissionMode
 from ..llm.factory import build_client
 from ..persistence.session import (
     SessionStore,
+    delete_session,
     list_project_sessions,
     list_sessions,
     load_session,
+    rename_session,
     restore_into,
 )
 from ..settings import load_env_files, load_settings, resolve_profile
@@ -209,8 +211,30 @@ class Connection:
             self._set_workspace(str(frame.get("path", "")))
         elif kind == "resume":
             self._resume(str(frame.get("id", "")))
+        elif kind == "set_tool_enabled":
+            self.agent.set_tool_enabled(str(frame.get("name", "")), bool(frame.get("enabled")))
+            self.send({"type": "tools", "tools": self.agent.tools_state()})
+        elif kind == "set_skill_enabled":
+            self.agent.set_skill_enabled(str(frame.get("name", "")), bool(frame.get("enabled")))
+            self.send({"type": "skills", "skills": self.agent.skills_state()})
+        elif kind == "rename_session":
+            self._rename_session(str(frame.get("id", "")), str(frame.get("title", "")))
+        elif kind == "delete_session":
+            self._delete_session(str(frame.get("id", "")))
         elif kind == "slash":
             await self._on_slash(str(frame.get("line", "")))
+
+    def _rename_session(self, sid: str, title: str) -> None:
+        if sid and title.strip():
+            with contextlib.suppress(Exception):
+                rename_session(sid, title.strip(), project_dir=Path.cwd() / ".codelet")
+            self.send({"type": "sessions_changed"})
+
+    def _delete_session(self, sid: str) -> None:
+        if sid:
+            with contextlib.suppress(Exception):
+                delete_session(sid, project_dir=Path.cwd() / ".codelet")
+            self.send({"type": "sessions_changed"})
 
     async def _on_prompt(self, text: str, attachments: list[dict[str, Any]] | None = None) -> None:
         attachments = attachments or []
@@ -359,6 +383,14 @@ class Connection:
         return {"cwd": self.workspace, "name": os.path.basename(self.workspace) or self.workspace}
 
 
+def _list_drives() -> list[str]:
+    """Available drive roots (Windows: C:\\, D:\\, ...; POSIX: /)."""
+    if os.name != "nt":
+        return ["/"]
+    import string
+    return [f"{d}:\\" for d in string.ascii_uppercase if Path(f"{d}:\\").exists()]
+
+
 def _image_block(path: str) -> dict[str, Any] | None:
     """Read an image file into an Anthropic-shaped base64 image content block.
     Returns None if it can't be read (falls back to a path note)."""
@@ -441,20 +473,40 @@ def create_app() -> FastAPI:
                           "is_image": p.suffix.lower() in _IMAGE_EXTS})
         return {"files": saved}
 
+    DRIVES = "::drives::"
+
     @app.get("/api/browse")
     def api_browse(path: str = "") -> dict[str, Any]:
-        """List subdirectories for the workspace picker. Defaults to $HOME."""
+        """List subdirectories for the workspace picker. `entries` carry full
+        paths so drive roots (E:\\, D:\\) are navigable, not just C:."""
+        if path == DRIVES:
+            entries = [{"name": d, "path": d} for d in _list_drives()]
+            return {"path": "This PC", "parent": None, "entries": entries, "is_root": True}
         try:
             base = (Path(path).expanduser() if path else Path.home()).resolve()
             if not base.is_dir():
                 base = Path.home().resolve()
-            dirs = sorted(
-                (p.name for p in base.iterdir() if p.is_dir() and not p.name.startswith(".")),
-                key=str.lower,
-            )[:300]
+            entries = sorted(
+                ({"name": p.name, "path": str(p)}
+                 for p in base.iterdir() if p.is_dir() and not p.name.startswith(".")),
+                key=lambda e: e["name"].lower(),
+            )[:500]
         except Exception as exc:
-            return {"path": str(Path.home()), "parent": str(Path.home()), "dirs": [], "error": str(exc)}
-        return {"path": str(base), "parent": str(base.parent), "dirs": dirs}
+            return {"path": str(Path.home()), "parent": DRIVES, "entries": [], "error": str(exc)}
+        # ".." from a drive root (parent == self) goes to the drive list.
+        parent = DRIVES if base.parent == base else str(base.parent)
+        return {"path": str(base), "parent": parent, "entries": entries}
+
+    @app.post("/api/shutdown")
+    def api_shutdown() -> dict[str, str]:
+        """Stop the server (the GUI's Quit button). Exits shortly after replying."""
+        def _bye() -> None:
+            import time
+            time.sleep(0.3)
+            os._exit(0)
+        import threading
+        threading.Thread(target=_bye, daemon=True).start()
+        return {"status": "shutting down"}
 
     @app.get("/api/sessions")
     def api_sessions() -> dict[str, Any]:
@@ -496,6 +548,8 @@ def create_app() -> FastAPI:
         conn = Connection(websocket, settings)
         conn.send({"type": "profile", **conn._profile_data()})
         conn.send({"type": "workspace", **conn._workspace_data()})
+        conn.send({"type": "tools", "tools": conn.agent.tools_state()})
+        conn.send({"type": "skills", "skills": conn.agent.skills_state()})
         sender_task = asyncio.create_task(conn.sender())
         tasks: set[asyncio.Task] = set()
         try:

@@ -42,6 +42,8 @@ function render(ev) {
     case "workspace": return onWorkspace(ev);
     case "cleared": transcript.innerHTML = ""; current = null; toggleEmpty(); return;
     case "sessions_changed": return loadSessions();
+    case "tools": return renderToggleList("tools", ev.tools, "set_tool_enabled");
+    case "skills": return renderToggleList("skills", ev.skills, "set_skill_enabled");
     case "thinking": return onThinking(ev.on);
     case "text_delta": {
       const a = ensureAssistant(); clearThinking(a);
@@ -210,18 +212,21 @@ $("new-chat").addEventListener("click", () => send({ type: "new_conversation" })
 
 // ---------- workspace picker ----------
 let wsCurrent = "";
-function joinPath(base, name) { const sep = base.includes("\\") ? "\\" : "/"; return base.replace(/[\\/]+$/, "") + sep + name; }
 async function browseTo(path) {
   let r; try { r = await (await fetch("/api/browse?path=" + encodeURIComponent(path || ""))).json(); } catch (_) { return; }
-  wsCurrent = r.path; $("ws-cur").textContent = r.path; $("ws-input").value = r.path;
+  wsCurrent = r.is_root ? "" : r.path;
+  $("ws-cur").textContent = r.path;
+  $("ws-input").value = r.is_root ? "" : r.path;
   const ul = $("ws-dirs"); ul.innerHTML = "";
-  const up = el("li", "up");
-  up.innerHTML = '<svg class="ic" viewBox="0 0 24 24"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>';
-  up.appendChild(document.createTextNode(" ..")); up.onclick = () => browseTo(r.parent); ul.appendChild(up);
-  (r.dirs || []).forEach((d) => {
+  if (r.parent) {  // ".." — parent dir, or the drive list when at a drive root
+    const up = el("li", "up");
+    up.innerHTML = '<svg class="ic" viewBox="0 0 24 24"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>';
+    up.appendChild(document.createTextNode(" ..")); up.onclick = () => browseTo(r.parent); ul.appendChild(up);
+  }
+  (r.entries || []).forEach((d) => {
     const li = el("li");
     li.innerHTML = '<svg class="ic" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>';
-    li.appendChild(document.createTextNode(" " + d)); li.onclick = () => browseTo(joinPath(r.path, d)); ul.appendChild(li);
+    li.appendChild(document.createTextNode(" " + d.name)); li.onclick = () => browseTo(d.path); ul.appendChild(li);
   });
 }
 $("ws-chip").addEventListener("click", () => { $("ws-modal").classList.remove("hidden"); browseTo(""); });
@@ -243,28 +248,56 @@ async function loadSessions() {
   if (!rows.length) { ul.appendChild(el("li", "meta", "(no conversations here yet)")); return; }
   rows.forEach((r) => {
     const li = el("li", "session");
-    li.appendChild(el("span", "title", r.title || r.summary || "(untitled)"));
-    li.appendChild(el("span", "meta", `${r.updated_at || ""} · ${r.message_count ?? "?"} msgs`));
-    li.onclick = () => { activeSession = r.id; send({ type: "resume", id: r.id }); highlight(); };
+    const main = el("div", "s-main");
+    main.appendChild(el("span", "title", r.title || r.summary || "(untitled)"));
+    main.appendChild(el("span", "meta", `${r.updated_at || ""} · ${r.message_count ?? "?"} msgs`));
+    main.onclick = () => { activeSession = r.id; send({ type: "resume", id: r.id }); highlight(); };
+    const acts = el("div", "s-acts");
+    const rename = el("button", "s-btn", "✎"); rename.title = "rename";
+    rename.onclick = (e) => {
+      e.stopPropagation();
+      const t = prompt("Rename conversation:", r.title || r.summary || "");
+      if (t && t.trim()) send({ type: "rename_session", id: r.id, title: t.trim() });
+    };
+    const del = el("button", "s-btn", "🗑"); del.title = "delete";
+    del.onclick = (e) => {
+      e.stopPropagation();
+      if (confirm("Delete this conversation?")) send({ type: "delete_session", id: r.id });
+    };
+    acts.appendChild(rename); acts.appendChild(del);
+    li.appendChild(main); li.appendChild(acts);
     li._id = r.id; ul.appendChild(li);
   });
   highlight();
 }
 function highlight() { [...$("sessions").children].forEach((li) => li.classList.toggle("active", li._id === activeSession)); }
-async function loadPanels() {
-  await loadSessions();
-  fillList("tools", await safe("/api/tools"), (t) => t.name, (t) => t.description);
-  fillList("skills", await safe("/api/skills"), (t) => t.name, (t) => t.description);
-}
-function fillList(id, rows, title, desc) {
+async function loadPanels() { await loadSessions(); }  // tools/skills arrive over WS
+
+// Tools & skills: a checkbox per row toggles it live (hot-plug).
+function renderToggleList(id, rows, msgType) {
   const ul = $(id); ul.innerHTML = "";
-  (rows || []).forEach((r) => {
-    const li = el("li");
-    li.appendChild(el("span", "tname title", title(r)));
-    if (desc(r)) li.appendChild(el("span", "desc", " — " + desc(r)));
+  if (!rows || !rows.length) { ul.appendChild(el("li", "meta", "(none)")); return; }
+  rows.forEach((r) => {
+    const li = el("li", "toggle" + (r.enabled ? "" : " off"));
+    const cb = document.createElement("input");
+    cb.type = "checkbox"; cb.checked = r.enabled !== false;
+    cb.title = r.enabled !== false ? "enabled — click to disable" : "disabled — click to enable";
+    cb.onchange = () => send({ type: msgType, name: r.name, enabled: cb.checked });
+    const label = el("span", "tname title", r.name);
+    if (r.description) label.title = r.description;
+    li.appendChild(cb); li.appendChild(label);
     ul.appendChild(li);
   });
 }
+
+$("quit").addEventListener("click", async () => {
+  if (!confirm("Stop the codelet server and close the app?")) return;
+  try { await fetch("/api/shutdown", { method: "POST" }); } catch (_) {}
+  if (ws) { ws.onclose = null; ws.close(); }
+  document.body.innerHTML =
+    '<div style="display:grid;place-items:center;height:100vh;font:15px system-ui;color:#888;background:#1a1a1d">' +
+    'codelet server stopped — you can close this tab.</div>';
+});
 
 connect();
 loadPanels();

@@ -200,6 +200,11 @@ class AgentLoop:
         self._prompt_middleware: list[Callable[[str], str]] = []
         self._tool_middleware: list[Callable[..., Any]] = []
         self._plugin_commands: dict[str, Callable[[str], str]] = {}
+        # Runtime tool/skill toggles (GUI hot-plug). Disabled tools are hidden
+        # from the model and refused if called; disabled skills drop out of the
+        # system-prompt index.
+        self._disabled_tools: set[str] = set()
+        self._disabled_skills: set[str] = set()
         if not _is_subagent:
             self._apply_plugins()
 
@@ -347,7 +352,37 @@ class AgentLoop:
             skill_index=self.skill_index,
             model=self.config.model,
             sections=self._prompt_sections,
+            disabled_skills=self._disabled_skills,
         ))
+
+    # ---------- runtime tool/skill toggles (GUI hot-plug) ----------
+
+    def tools_state(self) -> list[dict[str, Any]]:
+        return [{"name": t.name, "description": t.description,
+                 "enabled": t.name not in self._disabled_tools}
+                for t in self.registry.all_tools()]
+
+    def skills_state(self) -> list[dict[str, Any]]:
+        out = []
+        for name in self.skill_index.names():
+            s = self.skill_index.get(name)
+            if s is not None:
+                out.append({"name": name, "description": s.description,
+                            "enabled": name not in self._disabled_skills})
+        return out
+
+    def set_tool_enabled(self, name: str, enabled: bool) -> None:
+        if enabled:
+            self._disabled_tools.discard(name)
+        else:
+            self._disabled_tools.add(name)
+
+    def set_skill_enabled(self, name: str, enabled: bool) -> None:
+        if enabled:
+            self._disabled_skills.discard(name)
+        else:
+            self._disabled_skills.add(name)
+        self.rebuild_system_prompt()  # skills live in the system prompt index
 
     async def _exec_with_middleware(self, name: str, tool: Any, tool_input: dict[str, Any]) -> ToolResult:
         """Run tool.aexecute through the plugin `wrap_tool` middleware chain."""
@@ -411,10 +446,12 @@ class AgentLoop:
         return response, printed
 
     def _chat_blocking(self, on_text: "Callable[[str], None] | None" = None) -> LLMResponse:
+        schemas = [s for s in self.registry.api_schemas()
+                   if s.get("name") not in self._disabled_tools]
         return self.client.chat(
             messages=self.context.get_api_messages(),
             system=self.context.system_prompt,
-            tools=self.registry.api_schemas(),
+            tools=schemas,
             model=self.config.model,
             max_tokens=self.config.max_tokens,
             on_text=on_text,
@@ -483,6 +520,8 @@ class AgentLoop:
         tool = self.registry.get(call.name)
         if tool is None:
             return self._error_result(call.id, f"Unknown tool '{call.name}'")
+        if call.name in self._disabled_tools:
+            return self._error_result(call.id, f"Tool '{call.name}' is disabled.")
 
         # PreToolUse hooks: may rewrite tool input or block execution.
         tool_input: dict[str, Any] = dict(call.input or {})

@@ -52,12 +52,28 @@ details.nav[open] > summary .chev { transform: rotate(180deg); }
 .list { list-style: none; margin: 2px 0 8px; padding: 0 2px; }
 .list li { padding: 7px 10px; border-radius: 8px; font-size: 13.5px; }
 .list.compact li { padding: 5px 10px; font-size: 12.5px; }
-.list li.session { cursor: pointer; }
+.list li.session { cursor: default; display: flex; align-items: center; gap: 6px; padding: 5px 6px 5px 10px; }
 .list li.session:hover, .list li.session.active { background: var(--panel-2); }
 .list li.session.active { box-shadow: inset 2px 0 0 var(--accent); }
+.list li.session .s-main { flex: 1; min-width: 0; cursor: pointer; }
 .list li .title { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .list li .meta, .list li .desc { color: var(--faint); font-size: 11px; }
 .list li .tname { font-family: var(--mono); font-size: 12px; }
+.s-acts { display: none; gap: 2px; flex: none; }
+.list li.session:hover .s-acts { display: flex; }
+.s-btn { border: 0; background: transparent; color: var(--faint); cursor: pointer; font-size: 12px;
+  border-radius: 6px; padding: 3px 5px; line-height: 1; }
+.s-btn:hover { background: var(--border); color: var(--text); }
+
+/* tool/skill toggles */
+.list li.toggle { display: flex; align-items: center; gap: 8px; }
+.list li.toggle input[type="checkbox"] { accent-color: var(--accent); cursor: pointer; flex: none; margin: 0; }
+.list li.toggle.off .tname { color: var(--faint); text-decoration: line-through; }
+
+.quit { margin-left: auto; border: 0; background: transparent; color: var(--faint); cursor: pointer;
+  border-radius: 7px; padding: 4px; display: grid; place-items: center; }
+.quit:hover { background: color-mix(in srgb, var(--err) 18%, transparent); color: var(--err); }
+.quit .ic { width: 15px; height: 15px; }
 
 .side-foot { border-top: 1px solid var(--border); padding: 10px 14px; display: flex; align-items: center; gap: 8px; }
 .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--err); flex: none; }
