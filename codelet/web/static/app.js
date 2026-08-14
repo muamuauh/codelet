@@ -1,105 +1,95 @@
 "use strict";
-// Thin client for the codelet web GUI: one WebSocket, a render(event) switch,
-// and REST calls to populate the sidebar. No framework, no build step.
+// codelet web GUI client: one WebSocket + a render(event) switch, plus REST for
+// the sidebar. No framework, no build step.
 
 const $ = (id) => document.getElementById(id);
 const transcript = $("transcript");
-const connDot = $("conn");
+const scroller = $("scroller");
 
-let ws = null;
-let current = null;   // the in-flight assistant message element
-let busy = false;
+let ws = null, current = null, busy = false, activeSession = null;
 
-// ---------- helpers ----------
-
+// ---------- dom helpers ----------
 function el(tag, cls, text) {
   const e = document.createElement(tag);
   if (cls) e.className = cls;
   if (text != null) e.textContent = text;
   return e;
 }
-function atBottom() {
-  return transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < 60;
-}
-function scroll() { transcript.scrollTop = transcript.scrollHeight; }
+const atBottom = () => scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 80;
+const scroll = () => { scroller.scrollTop = scroller.scrollHeight; };
+function toggleEmpty() { $("empty").classList.toggle("hidden", transcript.children.length > 0); }
 
 function addMessage(role) {
   const msg = el("div", `msg ${role}`);
-  msg.appendChild(el("div", "role", role));
+  msg.appendChild(el("div", "avatar", role === "assistant" ? "◆" : "U"));
+  const body = el("div", "body");
+  body.appendChild(el("div", "who", role === "assistant" ? "codelet" : "You"));
   const bubble = el("div", "bubble");
-  msg.appendChild(bubble);
+  body.appendChild(bubble);
+  msg.appendChild(body);
   transcript.appendChild(msg);
+  toggleEmpty();
   scroll();
-  return { msg, bubble, text: "" };
+  return { msg, body, bubble, text: "" };
 }
+function ensureAssistant() { return current || (current = addMessage("assistant")); }
+function clearThinking(a) { const t = a.body.querySelector(".thinking"); if (t) t.remove(); }
 
-function ensureAssistant() {
-  if (!current) current = addMessage("assistant");
-  return current;
-}
-
-// ---------- event rendering ----------
-
+// ---------- render incoming frames ----------
 function render(ev) {
   switch (ev.type) {
     case "profile": return onProfile(ev);
+    case "workspace": return onWorkspace(ev);
+    case "cleared": transcript.innerHTML = ""; current = null; toggleEmpty(); return;
+    case "sessions_changed": return loadSessions();
     case "thinking": return onThinking(ev.on);
     case "text_delta": {
-      const a = ensureAssistant();
-      clearThinking(a);
-      a.text += ev.text;
-      a.bubble.textContent = a.text;
+      const a = ensureAssistant(); clearThinking(a);
+      a.text += ev.text; a.bubble.textContent = a.text;
       if (atBottom()) scroll();
       return;
     }
     case "stream_end": return;
     case "tool_start": {
-      const a = ensureAssistant();
-      clearThinking(a);
+      const a = ensureAssistant(); clearThinking(a);
       const card = el("div", "tool");
       const head = el("div", "head");
-      head.appendChild(el("span", "name", ev.name));
+      head.appendChild(el("span", "tname", ev.name));
       head.appendChild(el("span", "badge run", "running"));
-      card.appendChild(head);
       const args = el("div", "args", JSON.stringify(ev.input));
-      card.appendChild(args);
+      head.onclick = () => { args.style.display = args.style.display === "none" ? "" : "none"; };
+      card.appendChild(head); card.appendChild(args);
       card._name = ev.name; card._done = false;
-      a.msg.appendChild(card);
+      a.body.appendChild(card);
       if (atBottom()) scroll();
       return;
     }
     case "tool_result": {
       const a = ensureAssistant();
-      const card = [...a.msg.querySelectorAll(".tool")].reverse()
+      const card = [...a.body.querySelectorAll(".tool")].reverse()
         .find((c) => c._name === ev.name && !c._done);
-      const badge = card ? card.querySelector(".badge") : null;
       if (card) {
         card._done = true;
+        const badge = card.querySelector(".badge");
         badge.className = "badge " + (ev.is_error ? "err" : "ok");
         badge.textContent = ev.is_error ? "error" : "ok";
-        const out = el("div", "out", ev.output);
-        card.appendChild(out);
+        card.appendChild(el("div", "out", ev.output));
       }
       if (atBottom()) scroll();
       return;
     }
     case "notice": {
-      transcript.appendChild(el("div", `note ${ev.level || "dim"}`, ev.message));
-      if (atBottom()) scroll();
+      transcript.appendChild(el("div", `note ${ev.level || "info"}`, ev.message));
+      toggleEmpty(); if (atBottom()) scroll();
       return;
     }
-    case "permission_request": return showModal(ev);
+    case "permission_request": return showDiff(ev);
     case "telemetry": return onTelemetry(ev);
-    case "turn_done": {
-      if (current) clearThinking(current);
-      current = null;
-      setBusy(false);
-      return;
-    }
+    case "turn_done": if (current) clearThinking(current); current = null; setBusy(false); return;
     case "resumed": return onResumed(ev);
     case "error": {
       transcript.appendChild(el("div", "note error", ev.message));
-      current = null; setBusy(false); scroll();
+      current = null; setBusy(false); toggleEmpty(); scroll();
       return;
     }
   }
@@ -107,64 +97,50 @@ function render(ev) {
 
 function onThinking(on) {
   const a = ensureAssistant();
-  if (on) {
-    if (!a.msg.querySelector(".thinking")) {
-      const t = el("div", "thinking", "thinking");
-      a.bubble.after(t);
-    }
-  } else {
-    clearThinking(a);
-  }
+  if (on && !a.body.querySelector(".thinking")) a.body.appendChild(el("div", "thinking", "thinking"));
+  else if (!on) clearThinking(a);
 }
-function clearThinking(a) {
-  const t = a.msg.querySelector(".thinking");
-  if (t) t.remove();
-}
-
 function onTelemetry(ev) {
   const t = ev.turn || {}, s = ev.session || {};
-  $("tel-turn").textContent = (t.input_tokens || 0) + " / " + (t.output_tokens || 0);
-  $("tel-session").textContent = (s.input_tokens || 0) + " / " + (s.output_tokens || 0);
+  $("tel-turn").textContent = `${t.input_tokens || 0} / ${t.output_tokens || 0}`;
+  $("tel-session").textContent = `${s.input_tokens || 0} / ${s.output_tokens || 0}`;
   $("tel-cost").textContent = s.cost_usd == null ? "n/a" : "$" + s.cost_usd.toFixed(4);
 }
-
 function onProfile(ev) {
-  $("provider-model").textContent = `${ev.provider}/${ev.model}` + (ev.profile ? ` · ${ev.profile}` : "");
+  $("provider").textContent = ev.provider + (ev.profile && ev.profile !== "_env" ? " · " + ev.profile : "");
   if (ev.mode) $("mode").value = ev.mode;
-  const sel = $("profile");
-  if (ev.profiles && sel.options.length !== ev.profiles.length + 1) {
-    sel.innerHTML = "";
-    sel.appendChild(new Option("(default)", ""));
-    ev.profiles.forEach((p) => sel.appendChild(new Option(p, p)));
-    if (ev.profile) sel.value = ev.profile;
-  }
+  const sel = $("model");
+  const models = (ev.models && ev.models.length) ? ev.models : (ev.model ? [ev.model] : []);
+  const sig = models.join("|");
+  if (sel._sig !== sig) { sel.innerHTML = ""; models.forEach((m) => sel.appendChild(new Option(m, m))); sel._sig = sig; }
+  if (ev.model) sel.value = ev.model;
 }
-
+function onWorkspace(ev) {
+  $("ws-name").textContent = ev.name || ev.cwd;
+  $("ws-name").title = ev.cwd;
+  $("ws-path").textContent = ev.cwd;
+}
 function onResumed(ev) {
-  transcript.innerHTML = "";
-  current = null;
+  transcript.innerHTML = ""; current = null;
   (ev.messages || []).forEach((m) => {
     const b = addMessage(m.role);
     b.bubble.textContent = m.text || "";
     (m.tools || []).forEach((name) => {
       const card = el("div", "tool");
       const head = el("div", "head");
-      head.appendChild(el("span", "name", name));
+      head.appendChild(el("span", "tname", name));
       head.appendChild(el("span", "badge ok", "done"));
       card.appendChild(head);
-      b.msg.appendChild(card);
+      b.body.appendChild(card);
     });
   });
-  current = null;
-  scroll();
+  current = null; toggleEmpty(); scroll();
 }
 
-// ---------- diff modal ----------
-
-function showModal(ev) {
+// ---------- diff approval ----------
+function showDiff(ev) {
   $("modal-tool").textContent = ev.tool;
-  const pre = $("modal-diff");
-  pre.innerHTML = "";
+  const pre = $("modal-diff"); pre.innerHTML = "";
   ev.diff.split("\n").forEach((line) => {
     let cls = "";
     if (line.startsWith("+") && !line.startsWith("+++")) cls = "add";
@@ -172,85 +148,93 @@ function showModal(ev) {
     pre.appendChild(el("span", cls, line + "\n"));
   });
   $("modal").classList.remove("hidden");
-  const decide = (approve) => {
-    $("modal").classList.add("hidden");
-    send({ type: approve ? "approve" : "reject", id: ev.id });
-  };
+  const decide = (ok) => { $("modal").classList.add("hidden"); send({ type: ok ? "approve" : "reject", id: ev.id }); };
   $("approve").onclick = () => decide(true);
   $("reject").onclick = () => decide(false);
 }
 
 // ---------- socket ----------
-
-function send(obj) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)); }
-
+function send(o) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); }
 function connect() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   ws = new WebSocket(`${proto}://${location.host}/ws`);
-  ws.onopen = () => connDot.classList.add("on");
-  ws.onclose = () => { connDot.classList.remove("on"); setTimeout(connect, 1500); };
+  ws.onopen = () => $("conn").classList.add("on");
+  ws.onclose = () => { $("conn").classList.remove("on"); setTimeout(connect, 1500); };
   ws.onmessage = (e) => render(JSON.parse(e.data));
 }
+function setBusy(b) { busy = b; $("send").disabled = b; }
 
-function setBusy(b) {
-  busy = b;
-  $("send").disabled = b;
-}
-
-// ---------- input ----------
-
+// ---------- composer ----------
 function submit() {
-  const inp = $("input");
-  const text = inp.value.trim();
+  const inp = $("input"), text = inp.value.trim();
   if (!text || busy) return;
   addMessage("user").bubble.textContent = text;
-  inp.value = ""; inp.style.height = "auto";
-  current = null;
-  setBusy(true);
+  inp.value = ""; inp.style.height = "auto"; current = null; setBusy(true);
   send(text.startsWith("/") ? { type: "slash", line: text } : { type: "prompt", text });
   scroll();
 }
-
 $("composer").addEventListener("submit", (e) => { e.preventDefault(); submit(); });
-$("input").addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); }
-});
-$("input").addEventListener("input", (e) => {
-  e.target.style.height = "auto";
-  e.target.style.height = Math.min(e.target.scrollHeight, 180) + "px";
-});
+$("input").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); } });
+$("input").addEventListener("input", (e) => { e.target.style.height = "auto"; e.target.style.height = Math.min(e.target.scrollHeight, 200) + "px"; });
 $("mode").addEventListener("change", (e) => send({ type: "set_mode", mode: e.target.value }));
-$("profile").addEventListener("change", (e) => send({ type: "set_profile", name: e.target.value }));
+$("model").addEventListener("change", (e) => send({ type: "set_model", model: e.target.value }));
+$("new-chat").addEventListener("click", () => send({ type: "new_conversation" }));
+
+// ---------- workspace picker ----------
+let wsCurrent = "";
+function joinPath(base, name) { const sep = base.includes("\\") ? "\\" : "/"; return base.replace(/[\\/]+$/, "") + sep + name; }
+async function browseTo(path) {
+  let r;
+  try { r = await (await fetch("/api/browse?path=" + encodeURIComponent(path || ""))).json(); }
+  catch (_) { return; }
+  wsCurrent = r.path; $("ws-cur").textContent = r.path; $("ws-input").value = r.path;
+  const ul = $("ws-dirs"); ul.innerHTML = "";
+  const up = el("li", "up"); up.appendChild(el("span", "ic", "↑")); up.appendChild(document.createTextNode(" .."));
+  up.onclick = () => browseTo(r.parent); ul.appendChild(up);
+  (r.dirs || []).forEach((d) => {
+    const li = el("li"); li.appendChild(el("span", "ic", "📁")); li.appendChild(document.createTextNode(" " + d));
+    li.onclick = () => browseTo(joinPath(r.path, d)); ul.appendChild(li);
+  });
+}
+$("ws-change").addEventListener("click", () => { $("ws-modal").classList.remove("hidden"); browseTo(""); });
+$("ws-cancel").addEventListener("click", () => $("ws-modal").classList.add("hidden"));
+$("ws-go").addEventListener("click", () => browseTo($("ws-input").value.trim()));
+$("ws-input").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); browseTo($("ws-input").value.trim()); } });
+$("ws-open").addEventListener("click", () => {
+  const path = $("ws-input").value.trim() || wsCurrent;
+  $("ws-modal").classList.add("hidden");
+  send({ type: "set_workspace", path });
+});
 
 // ---------- sidebar (REST) ----------
-
-async function loadPanels() {
-  try {
-    const s = await (await fetch("/api/sessions")).json();
-    fillSessions("sessions-project", s.project);
-    fillSessions("sessions-global", s.global);
-  } catch (_) {}
-  fillList("tools", await safe("/api/tools"), (t) => `${t.name}`, (t) => t.description);
-  fillList("skills", await safe("/api/skills"), (t) => t.name, (t) => t.description);
-}
-async function safe(url) { try { return await (await fetch(url)).json(); } catch (_) { return []; } }
-
-function fillSessions(id, rows) {
-  const ul = $(id); ul.innerHTML = "";
-  if (!rows || !rows.length) { ul.appendChild(el("li", "meta", "(none)")); return; }
+async function safe(url) { try { return await (await fetch(url)).json(); } catch (_) { return null; } }
+async function loadSessions() {
+  const s = await safe("/api/sessions");
+  const ul = $("sessions"); ul.innerHTML = "";
+  const rows = (s && s.project) || [];
+  if (!rows.length) { ul.appendChild(el("li", "meta", "(no conversations here yet)")); return; }
   rows.forEach((r) => {
     const li = el("li", "session");
     li.appendChild(el("span", "title", r.title || r.summary || "(untitled)"));
-    li.appendChild(el("span", "meta", `${r.id} · ${r.message_count ?? "?"} msgs`));
-    li.onclick = () => send({ type: "resume", id: r.id });
-    ul.appendChild(li);
+    li.appendChild(el("span", "meta", `${r.updated_at || ""} · ${r.message_count ?? "?"} msgs`));
+    li.onclick = () => { activeSession = r.id; send({ type: "resume", id: r.id }); highlight(); };
+    li._id = r.id; ul.appendChild(li);
   });
+  highlight();
+}
+function highlight() {
+  [...$("sessions").children].forEach((li) => li.classList.toggle("active", li._id === activeSession));
+}
+async function loadPanels() {
+  await loadSessions();
+  fillList("tools", await safe("/api/tools"), (t) => t.name, (t) => t.description);
+  fillList("skills", await safe("/api/skills"), (t) => t.name, (t) => t.description);
 }
 function fillList(id, rows, title, desc) {
   const ul = $(id); ul.innerHTML = "";
   (rows || []).forEach((r) => {
     const li = el("li");
-    li.appendChild(el("span", "title", title(r)));
+    li.appendChild(el("span", "tname title", title(r)));
     if (desc(r)) li.appendChild(el("span", "desc", " — " + desc(r)));
     ul.appendChild(li);
   });
@@ -258,3 +242,4 @@ function fillList(id, rows, title, desc) {
 
 connect();
 loadPanels();
+toggleEmpty();

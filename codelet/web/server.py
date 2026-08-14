@@ -7,8 +7,10 @@ static, read-mostly data the sidebar/panels need. Everything heavy is reused fro
 the core: config composition, session persistence, telemetry, slash commands.
 
 Frames the server sends: text_delta, stream_end, tool_start, tool_result, notice,
-thinking, permission_request, telemetry, turn_done, resumed, error.
-Frames it receives: prompt, approve, reject, set_mode, set_profile, resume, slash.
+thinking, permission_request, telemetry, turn_done, resumed, profile, workspace,
+cleared, sessions_changed, error.
+Frames it receives: prompt, approve, reject, set_mode, set_model, set_profile,
+new_conversation, set_workspace, resume, slash.
 """
 from __future__ import annotations
 
@@ -42,6 +44,22 @@ from ..slash.loader import expand_command, load_commands
 from ..system_prompt import build_system_prompt
 
 STATIC_DIR = Path(__file__).parent / "static"
+
+
+def _env_model_list() -> list[str]:
+    """Models offered in the UI switcher, from `LLM_MODELS` in .env (comma-separated).
+
+    With a proxy the base_url + api_key are fixed and only the model name changes,
+    so this is a plain list -- e.g. LLM_MODELS=qwen/qwen3.7-max,moonshotai/kimi-k3.
+    """
+    raw = os.environ.get("LLM_MODELS", "")
+    seen, out = set(), []
+    for m in raw.split(","):
+        m = m.strip()
+        if m and m not in seen:
+            seen.add(m)
+            out.append(m)
+    return out
 
 
 class _Status:
@@ -104,28 +122,45 @@ class Connection:
         self.sink = WebSocketSink(self.outbound)
         self.pending: dict[str, asyncio.Future[bool]] = {}
         self.busy = False
-        self.agent = self._build_agent(mode="ask")
-        # Own session file per connection (auto-saved after each turn).
+        # State that survives an agent rebuild (new chat / workspace switch).
+        self.model: str | None = None      # None -> use the .env / profile default
+        self.mode = "ask"
+        self.workspace = os.getcwd()
         self.store: SessionStore | None = None
-        try:
-            self.store = SessionStore(project_dir=Path.cwd() / ".codelet")
-        except Exception:
-            self.store = None
+        self.agent: AgentLoop = None  # type: ignore[assignment]
+        self._build()
 
     # ---- agent wiring ----
 
-    def _build_agent(self, *, profile: str | None = None, mode: str | None = None) -> AgentLoop:
-        ns = SimpleNamespace(profile=profile, provider=None, model=None, base_url=None,
-                             api_key=None, mode=mode, max_turns=None, no_stream=False)
+    def _build(self) -> None:
+        """(Re)build the agent + session store in the current working directory,
+        preserving the chosen model/mode. Picks up the cwd's .env/.codelet/skills."""
+        ns = SimpleNamespace(profile=None, provider=None, model=self.model, base_url=None,
+                             api_key=None, mode=self.mode, max_turns=None, no_stream=False)
         config = _build_config(ns, self.settings)
+        # Remember the resolved default so the model dropdown can show it.
+        self.model = config.model
+        self.mode = config.permission_mode.value
         quiet = Console(file=open(os.devnull, "w"))  # sink handles all output
-        return AgentLoop(
+        self.agent = AgentLoop(
             config=config,
             console=quiet,
             sink=self.sink,
             confirm_callback=self._confirm,
             skill_index=load_skills(),
         )
+        try:
+            self.store = SessionStore(project_dir=Path.cwd() / ".codelet")
+        except Exception:
+            self.store = None
+
+    def _env_models(self) -> list[str]:
+        """Switchable models: the LLM_MODELS list from .env, plus the active one."""
+        models = _env_model_list()
+        cur = self.agent.config.model if self.agent else self.model
+        if cur and cur not in models:
+            models = [cur, *models]
+        return models
 
     async def _confirm(self, tool_name: str, diff: str) -> bool:
         """Async diff approval: ask the browser, await the click."""
@@ -162,8 +197,14 @@ class Connection:
                 fut.set_result(kind == "approve")
         elif kind == "set_mode":
             self._set_mode(str(frame.get("mode", "")))
+        elif kind == "set_model":
+            self._set_model(str(frame.get("model", "")))
         elif kind == "set_profile":
             self._set_profile(str(frame.get("name", "")))
+        elif kind == "new_conversation":
+            self._new_conversation()
+        elif kind == "set_workspace":
+            self._set_workspace(str(frame.get("path", "")))
         elif kind == "resume":
             self._resume(str(frame.get("id", "")))
         elif kind == "slash":
@@ -212,9 +253,46 @@ class Connection:
 
     def _set_mode(self, mode: str) -> None:
         if mode in ("ask", "auto", "plan"):
+            self.mode = mode
             self.agent.config.permission_mode = PermissionMode(mode)
             self._refresh_system_prompt()
             self.send({"type": "profile", **self._profile_data()})
+
+    def _set_model(self, model: str) -> None:
+        """Switch just the model. With a proxy the base_url/api_key are unchanged and
+        the model name is passed per request, so no client rebuild is needed."""
+        if not model:
+            return
+        self.model = model
+        self.agent.config.model = model
+        self._refresh_system_prompt()
+        self.send({"type": "profile", **self._profile_data()})
+
+    def _new_conversation(self) -> None:
+        """Fresh agent + new session id in the same workspace, keeping model/mode."""
+        self._build()
+        self.send({"type": "cleared"})
+        self.send({"type": "profile", **self._profile_data()})
+        self.send({"type": "workspace", **self._workspace_data()})
+
+    def _set_workspace(self, path: str) -> None:
+        """Point the agent at another project directory: chdir, then rebuild so its
+        file tools, .codelet skills/CLAUDE.md, and sessions all come from there."""
+        p = Path(path).expanduser()
+        if not p.is_dir():
+            self.send({"type": "error", "message": f"not a directory: {path}"})
+            return
+        try:
+            os.chdir(str(p))
+        except OSError as exc:
+            self.send({"type": "error", "message": f"cannot enter {path}: {exc}"})
+            return
+        self.workspace = os.getcwd()
+        self._build()
+        self.send({"type": "cleared"})
+        self.send({"type": "workspace", **self._workspace_data()})
+        self.send({"type": "profile", **self._profile_data()})
+        self.send({"type": "sessions_changed"})
 
     def _set_profile(self, name: str) -> None:
         # Rebuild the client under the new profile, keep the conversation/context.
@@ -252,8 +330,12 @@ class Connection:
         return {
             "profile": c.profile_name, "provider": c.provider.value, "model": c.model,
             "base_url": c.base_url or "", "mode": c.permission_mode.value,
+            "models": self._env_models(),
             "profiles": sorted((self.settings.get("profiles") or {}).keys()),
         }
+
+    def _workspace_data(self) -> dict[str, Any]:
+        return {"cwd": self.workspace, "name": os.path.basename(self.workspace) or self.workspace}
 
 
 def _transcript(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -295,11 +377,30 @@ def create_app() -> FastAPI:
         ns = SimpleNamespace(profile=None, provider=None, model=None, base_url=None,
                              api_key=None, mode="ask", max_turns=None, no_stream=False)
         c = _build_config(ns, settings)
+        models = _env_model_list()
+        if c.model and c.model not in models:
+            models = [c.model, *models]
         return {
             "profile": c.profile_name, "provider": c.provider.value, "model": c.model,
             "base_url": c.base_url or "", "mode": c.permission_mode.value,
+            "models": models,
             "profiles": sorted((settings.get("profiles") or {}).keys()),
         }
+
+    @app.get("/api/browse")
+    def api_browse(path: str = "") -> dict[str, Any]:
+        """List subdirectories for the workspace picker. Defaults to $HOME."""
+        try:
+            base = (Path(path).expanduser() if path else Path.home()).resolve()
+            if not base.is_dir():
+                base = Path.home().resolve()
+            dirs = sorted(
+                (p.name for p in base.iterdir() if p.is_dir() and not p.name.startswith(".")),
+                key=str.lower,
+            )[:300]
+        except Exception as exc:
+            return {"path": str(Path.home()), "parent": str(Path.home()), "dirs": [], "error": str(exc)}
+        return {"path": str(base), "parent": str(base.parent), "dirs": dirs}
 
     @app.get("/api/sessions")
     def api_sessions() -> dict[str, Any]:
@@ -337,6 +438,7 @@ def create_app() -> FastAPI:
         await websocket.accept()
         conn = Connection(websocket, settings)
         conn.send({"type": "profile", **conn._profile_data()})
+        conn.send({"type": "workspace", **conn._workspace_data()})
         sender_task = asyncio.create_task(conn.sender())
         tasks: set[asyncio.Task] = set()
         try:

@@ -8,71 +8,111 @@
 </head>
 <body>
   <div id="app">
+    <!-- ───────────── sidebar ───────────── -->
     <aside id="sidebar">
-      <div class="brand">codelet</div>
+      <div class="side-top">
+        <div class="brand"><span class="logo">◆</span> codelet</div>
+        <button id="new-chat" class="new-chat">＋ New chat</button>
+      </div>
 
-      <section class="panel">
-        <h2>Sessions</h2>
-        <div class="sub">This project</div>
-        <ul id="sessions-project" class="list"></ul>
-        <div class="sub">Recent</div>
-        <ul id="sessions-global" class="list"></ul>
-      </section>
+      <div class="side-scroll">
+        <section class="ws-card">
+          <div class="ws-label">Workspace</div>
+          <div class="ws-row">
+            <div class="ws-name" id="ws-name" title="">—</div>
+            <button id="ws-change" class="ghost sm">Change</button>
+          </div>
+          <div class="ws-path" id="ws-path"></div>
+        </section>
 
-      <details class="panel">
-        <summary>Tools</summary>
-        <ul id="tools" class="list"></ul>
-      </details>
+        <section class="side-section">
+          <div class="side-h">Conversations</div>
+          <ul id="sessions" class="list"></ul>
+        </section>
 
-      <details class="panel">
-        <summary>Skills</summary>
-        <ul id="skills" class="list"></ul>
-      </details>
+        <details class="side-section">
+          <summary class="side-h">Tools</summary>
+          <ul id="tools" class="list compact"></ul>
+        </details>
+        <details class="side-section">
+          <summary class="side-h">Skills</summary>
+          <ul id="skills" class="list compact"></ul>
+        </details>
+      </div>
+
+      <div class="side-foot">
+        <span id="conn" class="dot" title="disconnected"></span>
+        <span id="provider" class="prov">—</span>
+      </div>
     </aside>
 
+    <!-- ───────────── main ───────────── -->
     <main id="main">
       <header id="topbar">
-        <div class="ident">
-          <span id="provider-model" class="pm">—</span>
-          <span id="conn" class="dot" title="disconnected"></span>
-        </div>
-        <div class="controls">
-          <label class="mode">
-            mode
+        <div class="seg">
+          <label class="fld">
+            <span>Model</span>
+            <select id="model"></select>
+          </label>
+          <label class="fld">
+            <span>Mode</span>
             <select id="mode">
               <option value="ask">ask</option>
               <option value="auto">auto</option>
               <option value="plan">plan</option>
             </select>
           </label>
-          <label class="mode">
-            profile
-            <select id="profile"></select>
-          </label>
-          <div id="telemetry" class="telemetry">
-            <span title="this turn">turn <b id="tel-turn">0</b></span>
-            <span title="session tokens (in/out)">session <b id="tel-session">0 / 0</b></span>
-            <span title="session cost"><b id="tel-cost">n/a</b></span>
-          </div>
+        </div>
+        <div id="telemetry" class="telemetry">
+          <span title="this turn">turn <b id="tel-turn">0 / 0</b></span>
+          <span title="session tokens in / out">session <b id="tel-session">0 / 0</b></span>
+          <span title="session cost"><b id="tel-cost">n/a</b></span>
         </div>
       </header>
 
-      <div id="transcript"></div>
+      <div id="scroller">
+        <div id="transcript"></div>
+        <div id="empty" class="empty">
+          <div class="empty-logo">◆</div>
+          <div class="empty-title">codelet</div>
+          <div class="empty-sub">Ask about the code, or tell it what to build. It works in your selected workspace.</div>
+        </div>
+      </div>
 
       <form id="composer">
-        <textarea id="input" rows="1" placeholder="Ask codelet…  (Enter to send, Shift+Enter for newline)"></textarea>
-        <button id="send" type="submit">Send</button>
+        <div class="composer-inner">
+          <textarea id="input" rows="1" placeholder="Message codelet…  (Enter to send · Shift+Enter for newline)"></textarea>
+          <button id="send" type="submit" title="Send">➤</button>
+        </div>
       </form>
     </main>
   </div>
 
+  <!-- diff approval -->
   <div id="modal" class="modal hidden">
     <div class="modal-card">
       <h3>Apply this change via <span id="modal-tool"></span>?</h3>
       <pre id="modal-diff" class="diff"></pre>
       <div class="modal-actions">
-        <button id="reject" class="btn-reject">Reject</button>
-        <button id="approve" class="btn-approve">Approve</button>
+        <button id="reject" class="btn ghost">Reject</button>
+        <button id="approve" class="btn primary">Approve</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- workspace picker -->
+  <div id="ws-modal" class="modal hidden">
+    <div class="modal-card">
+      <h3>Choose a workspace</h3>
+      <div class="ws-input-row">
+        <input id="ws-input" type="text" placeholder="Type or paste an absolute path…" />
+        <button id="ws-go" class="btn ghost sm">Go</button>
+      </div>
+      <div class="ws-cur" id="ws-cur"></div>
+      <ul id="ws-dirs" class="ws-dirs"></ul>
+      <div class="modal-actions">
+        <button id="ws-cancel" class="btn ghost">Cancel</button>
+        <button id="ws-open" class="btn primary">Open this folder</button>
       </div>
     </div>
   </div>

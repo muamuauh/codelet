@@ -159,9 +159,11 @@ python -m codelet.web            # 起服务并自动打开浏览器（--no-open
 ```
 
 - **流式输出**:token 实时逐字显示(WebSocket)
+- **模型切换**:顶栏下拉直接换模型(列表来自 `.env` 的 `LLM_MODELS`;代理场景下 base_url/api_key 不变,只换模型名)
+- **新建对话 / 选工作区**:侧栏 `＋ New chat` 开新会话;`Workspace → Change` 弹目录选择器,切到别的项目目录(agent 的文件工具、`.codelet` skills/CLAUDE.md、会话都随之切换)
 - **工具可见**:每次工具调用渲染成卡片(参数 + 结果,按成功/失败着色)
 - **权限审批**:ASK 模式下 `write_file`/`edit_file` 弹 **diff 预览** + Approve/Reject;AUTO 模式直接执行。顶栏可实时切换
-- **会话/画像/遥测**:左侧栏列出本项目 + 最近会话(点击恢复);顶栏切 profile、看 token/成本
+- **会话/遥测**:侧栏列出当前项目的会话(点击恢复);顶栏看 token/成本
 - 纯原生 HTML/JS,无构建链;只绑 `127.0.0.1`(本地)
 
 实现上,核心 `AgentLoop` 通过一个极小的 [`events.py`](codelet/events.py) `AgentSink`

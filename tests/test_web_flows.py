@@ -94,6 +94,7 @@ def test_auto_mode_switch_skips_approval(monkeypatch, tmp_path):
                      [_tool_use(3, target, "auto"), _text("done")])
     with client.websocket_connect("/ws") as ws:
         assert ws.receive_json()["type"] == "profile"
+        assert ws.receive_json()["type"] == "workspace"  # sent on connect
         ws.send_json({"type": "set_mode", "mode": "auto"})
         prof = ws.receive_json()
         assert prof["type"] == "profile" and prof["mode"] == "auto"

@@ -6,6 +6,7 @@ without any network, and we assert the browser-facing frames come back.
 """
 from __future__ import annotations
 
+import os
 from typing import Any
 
 import pytest
@@ -15,6 +16,22 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from codelet.llm.base import LLMClient, LLMResponse  # noqa: E402
 from codelet.web.server import create_app  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _restore_cwd():
+    # set_workspace chdir's the process; keep tests isolated from each other.
+    cwd = os.getcwd()
+    yield
+    os.chdir(cwd)
+
+
+def _recv_until(ws, kind: str, limit: int = 10) -> dict:
+    for _ in range(limit):
+        f = ws.receive_json()
+        if f["type"] == kind:
+            return f
+    raise AssertionError(f"no {kind} frame within {limit}")
 
 
 class ScriptedClient(LLMClient):
@@ -73,6 +90,50 @@ def test_ws_prompt_streams_back(client):
 def test_set_mode_echoes_profile(client):
     with client.websocket_connect("/ws") as ws:
         assert ws.receive_json()["type"] == "profile"
+        assert ws.receive_json()["type"] == "workspace"  # sent on connect
         ws.send_json({"type": "set_mode", "mode": "auto"})
-        f = ws.receive_json()
-        assert f["type"] == "profile" and f["mode"] == "auto"
+        f = _recv_until(ws, "profile")
+        assert f["mode"] == "auto"
+
+
+def test_profile_lists_env_models(client, monkeypatch):
+    monkeypatch.setenv("LLM_MODELS", "m1/a, m2/b ,m3/c")
+    models = client.get("/api/profile").json()["models"]
+    assert {"m1/a", "m2/b", "m3/c"}.issubset(set(models))
+
+
+def test_browse_lists_visible_dirs(client, tmp_path):
+    (tmp_path / "sub1").mkdir()
+    (tmp_path / "sub2").mkdir()
+    (tmp_path / ".hidden").mkdir()
+    r = client.get("/api/browse", params={"path": str(tmp_path)}).json()
+    assert r["path"] == str(tmp_path.resolve())
+    assert "sub1" in r["dirs"] and "sub2" in r["dirs"]
+    assert ".hidden" not in r["dirs"]
+
+
+def test_ws_set_model(client):
+    with client.websocket_connect("/ws") as ws:
+        _recv_until(ws, "profile")
+        ws.send_json({"type": "set_model", "model": "foo/bar-42"})
+        f = _recv_until(ws, "profile")
+        assert f["model"] == "foo/bar-42"
+
+
+def test_ws_new_conversation_clears(client):
+    with client.websocket_connect("/ws") as ws:
+        _recv_until(ws, "workspace")
+        ws.send_json({"type": "new_conversation"})
+        kinds = {ws.receive_json()["type"] for _ in range(3)}
+        assert {"cleared", "profile", "workspace"}.issubset(kinds)
+
+
+def test_ws_set_workspace(client, tmp_path):
+    (tmp_path / "proj").mkdir()
+    target = str((tmp_path / "proj").resolve())
+    with client.websocket_connect("/ws") as ws:
+        _recv_until(ws, "workspace")
+        ws.send_json({"type": "set_workspace", "path": target})
+        f = _recv_until(ws, "workspace")
+        assert f["cwd"] == target
+        assert os.path.samefile(os.getcwd(), target)
