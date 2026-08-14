@@ -128,6 +128,21 @@ def test_ws_new_conversation_clears(client):
         assert {"cleared", "profile", "workspace"}.issubset(kinds)
 
 
+def test_upload_saves_files(client, tmp_path):
+    os.chdir(tmp_path)  # uploads land under cwd/.codelet/uploads; restored by fixture
+    r = client.post("/api/upload", files=[
+        ("files", ("a.txt", b"hello", "text/plain")),
+        ("files", ("pic.png", b"\x89PNG\r\n\x1a\n", "image/png")),
+    ])
+    assert r.status_code == 200
+    saved = r.json()["files"]
+    assert {f["name"] for f in saved} == {"a.txt", "pic.png"}
+    assert any(f["name"] == "pic.png" and f["is_image"] for f in saved)
+    assert any(f["name"] == "a.txt" and not f["is_image"] for f in saved)
+    for f in saved:
+        assert os.path.isfile(f["path"])
+
+
 def test_ws_set_workspace(client, tmp_path):
     (tmp_path / "proj").mkdir()
     target = str((tmp_path / "proj").resolve())

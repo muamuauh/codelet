@@ -1,12 +1,12 @@
 "use strict";
 // codelet web GUI client: one WebSocket + a render(event) switch, plus REST for
-// the sidebar. No framework, no build step.
+// the sidebar, uploads, and directory browsing. No framework, no build step.
 
 const $ = (id) => document.getElementById(id);
 const transcript = $("transcript");
 const scroller = $("scroller");
 
-let ws = null, current = null, busy = false, activeSession = null;
+let ws = null, current = null, busy = false, activeSession = null, attachments = [];
 
 // ---------- dom helpers ----------
 function el(tag, cls, text) {
@@ -15,6 +15,7 @@ function el(tag, cls, text) {
   if (text != null) e.textContent = text;
   return e;
 }
+const fmt = (n) => (n || 0).toLocaleString();
 const atBottom = () => scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 80;
 const scroll = () => { scroller.scrollTop = scroller.scrollHeight; };
 function toggleEmpty() { $("empty").classList.toggle("hidden", transcript.children.length > 0); }
@@ -28,8 +29,7 @@ function addMessage(role) {
   body.appendChild(bubble);
   msg.appendChild(body);
   transcript.appendChild(msg);
-  toggleEmpty();
-  scroll();
+  toggleEmpty(); scroll();
   return { msg, body, bubble, text: "" };
 }
 function ensureAssistant() { return current || (current = addMessage("assistant")); }
@@ -66,8 +66,7 @@ function render(ev) {
     }
     case "tool_result": {
       const a = ensureAssistant();
-      const card = [...a.body.querySelectorAll(".tool")].reverse()
-        .find((c) => c._name === ev.name && !c._done);
+      const card = [...a.body.querySelectorAll(".tool")].reverse().find((c) => c._name === ev.name && !c._done);
       if (card) {
         card._done = true;
         const badge = card.querySelector(".badge");
@@ -78,20 +77,12 @@ function render(ev) {
       if (atBottom()) scroll();
       return;
     }
-    case "notice": {
-      transcript.appendChild(el("div", `note ${ev.level || "info"}`, ev.message));
-      toggleEmpty(); if (atBottom()) scroll();
-      return;
-    }
+    case "notice": { transcript.appendChild(el("div", `note ${ev.level || "info"}`, ev.message)); toggleEmpty(); if (atBottom()) scroll(); return; }
     case "permission_request": return showDiff(ev);
     case "telemetry": return onTelemetry(ev);
     case "turn_done": if (current) clearThinking(current); current = null; setBusy(false); return;
     case "resumed": return onResumed(ev);
-    case "error": {
-      transcript.appendChild(el("div", "note error", ev.message));
-      current = null; setBusy(false); toggleEmpty(); scroll();
-      return;
-    }
+    case "error": { transcript.appendChild(el("div", "note error", ev.message)); current = null; setBusy(false); toggleEmpty(); scroll(); return; }
   }
 }
 
@@ -102,9 +93,9 @@ function onThinking(on) {
 }
 function onTelemetry(ev) {
   const t = ev.turn || {}, s = ev.session || {};
-  $("tel-turn").textContent = `${t.input_tokens || 0} / ${t.output_tokens || 0}`;
-  $("tel-session").textContent = `${s.input_tokens || 0} / ${s.output_tokens || 0}`;
-  $("tel-cost").textContent = s.cost_usd == null ? "n/a" : "$" + s.cost_usd.toFixed(4);
+  $("tt-in").textContent = fmt(t.input_tokens); $("tt-out").textContent = fmt(t.output_tokens);
+  $("ts-in").textContent = fmt(s.input_tokens); $("ts-out").textContent = fmt(s.output_tokens);
+  $("ts-cost").textContent = s.cost_usd == null ? "n/a" : "~$" + s.cost_usd.toFixed(4);
 }
 function onProfile(ev) {
   $("provider").textContent = ev.provider + (ev.profile && ev.profile !== "_env" ? " · " + ev.profile : "");
@@ -115,23 +106,17 @@ function onProfile(ev) {
   if (sel._sig !== sig) { sel.innerHTML = ""; models.forEach((m) => sel.appendChild(new Option(m, m))); sel._sig = sig; }
   if (ev.model) sel.value = ev.model;
 }
-function onWorkspace(ev) {
-  $("ws-name").textContent = ev.name || ev.cwd;
-  $("ws-name").title = ev.cwd;
-  $("ws-path").textContent = ev.cwd;
-}
+function onWorkspace(ev) { $("ws-name").textContent = ev.name || ev.cwd; $("ws-chip").title = ev.cwd; }
 function onResumed(ev) {
   transcript.innerHTML = ""; current = null;
   (ev.messages || []).forEach((m) => {
     const b = addMessage(m.role);
     b.bubble.textContent = m.text || "";
     (m.tools || []).forEach((name) => {
-      const card = el("div", "tool");
-      const head = el("div", "head");
+      const card = el("div", "tool"); const head = el("div", "head");
       head.appendChild(el("span", "tname", name));
       head.appendChild(el("span", "badge ok", "done"));
-      card.appendChild(head);
-      b.body.appendChild(card);
+      card.appendChild(head); b.body.appendChild(card);
     });
   });
   current = null; toggleEmpty(); scroll();
@@ -164,13 +149,55 @@ function connect() {
 }
 function setBusy(b) { busy = b; $("send").disabled = b; }
 
+// ---------- attachments / upload ----------
+async function uploadFiles(fileList) {
+  const files = [...fileList];
+  if (!files.length) return;
+  const fd = new FormData();
+  files.forEach((f) => fd.append("files", f));
+  const locals = files.map((f) => ({ is_image: f.type.startsWith("image/"), url: URL.createObjectURL(f) }));
+  let res;
+  try { res = await (await fetch("/api/upload", { method: "POST", body: fd })).json(); }
+  catch (_) { transcript.appendChild(el("div", "note error", "upload failed")); return; }
+  (res.files || []).forEach((sv, i) => attachments.push({ ...sv, url: locals[i] && locals[i].url }));
+  renderAttachments();
+}
+function renderAttachments() {
+  const box = $("attachments"); box.innerHTML = "";
+  attachments.forEach((a, idx) => {
+    const chip = el("div", "att-chip");
+    if (a.is_image && a.url) { const im = document.createElement("img"); im.src = a.url; chip.appendChild(im); }
+    chip.appendChild(el("span", null, a.name));
+    const x = el("span", "x", "×"); x.onclick = () => { attachments.splice(idx, 1); renderAttachments(); };
+    chip.appendChild(x); box.appendChild(chip);
+  });
+}
+$("attach").addEventListener("click", () => $("file-input").click());
+$("file-input").addEventListener("change", (e) => { uploadFiles(e.target.files); e.target.value = ""; });
+
 // ---------- composer ----------
 function submit() {
-  const inp = $("input"), text = inp.value.trim();
-  if (!text || busy) return;
-  addMessage("user").bubble.textContent = text;
-  inp.value = ""; inp.style.height = "auto"; current = null; setBusy(true);
-  send(text.startsWith("/") ? { type: "slash", line: text } : { type: "prompt", text });
+  const text = $("input").value.trim();
+  if ((!text && !attachments.length) || busy) return;
+  const atts = attachments.slice();
+  let prompt = text;
+  if (atts.length) {
+    const lines = atts.map((a) => "- " + a.path).join("\n");
+    prompt = (text ? text + "\n\n" : "") + "[Attached files — read them if relevant:\n" + lines + "\n]";
+  }
+  const b = addMessage("user");
+  b.bubble.textContent = text || "(sent attachments)";
+  if (atts.length) {
+    const box = el("div", "att");
+    atts.forEach((a) => {
+      if (a.is_image && a.url) { const im = document.createElement("img"); im.src = a.url; box.appendChild(im); }
+      else box.appendChild(el("span", "file", a.name));
+    });
+    b.body.appendChild(box);
+  }
+  $("input").value = ""; $("input").style.height = "auto"; attachments = []; renderAttachments();
+  current = null; setBusy(true);
+  send(text.startsWith("/") && !atts.length ? { type: "slash", line: text } : { type: "prompt", text: prompt });
   scroll();
 }
 $("composer").addEventListener("submit", (e) => { e.preventDefault(); submit(); });
@@ -184,19 +211,19 @@ $("new-chat").addEventListener("click", () => send({ type: "new_conversation" })
 let wsCurrent = "";
 function joinPath(base, name) { const sep = base.includes("\\") ? "\\" : "/"; return base.replace(/[\\/]+$/, "") + sep + name; }
 async function browseTo(path) {
-  let r;
-  try { r = await (await fetch("/api/browse?path=" + encodeURIComponent(path || ""))).json(); }
-  catch (_) { return; }
+  let r; try { r = await (await fetch("/api/browse?path=" + encodeURIComponent(path || ""))).json(); } catch (_) { return; }
   wsCurrent = r.path; $("ws-cur").textContent = r.path; $("ws-input").value = r.path;
   const ul = $("ws-dirs"); ul.innerHTML = "";
-  const up = el("li", "up"); up.appendChild(el("span", "ic", "↑")); up.appendChild(document.createTextNode(" .."));
-  up.onclick = () => browseTo(r.parent); ul.appendChild(up);
+  const up = el("li", "up");
+  up.innerHTML = '<svg class="ic" viewBox="0 0 24 24"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>';
+  up.appendChild(document.createTextNode(" ..")); up.onclick = () => browseTo(r.parent); ul.appendChild(up);
   (r.dirs || []).forEach((d) => {
-    const li = el("li"); li.appendChild(el("span", "ic", "📁")); li.appendChild(document.createTextNode(" " + d));
-    li.onclick = () => browseTo(joinPath(r.path, d)); ul.appendChild(li);
+    const li = el("li");
+    li.innerHTML = '<svg class="ic" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>';
+    li.appendChild(document.createTextNode(" " + d)); li.onclick = () => browseTo(joinPath(r.path, d)); ul.appendChild(li);
   });
 }
-$("ws-change").addEventListener("click", () => { $("ws-modal").classList.remove("hidden"); browseTo(""); });
+$("ws-chip").addEventListener("click", () => { $("ws-modal").classList.remove("hidden"); browseTo(""); });
 $("ws-cancel").addEventListener("click", () => $("ws-modal").classList.add("hidden"));
 $("ws-go").addEventListener("click", () => browseTo($("ws-input").value.trim()));
 $("ws-input").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); browseTo($("ws-input").value.trim()); } });
@@ -222,9 +249,7 @@ async function loadSessions() {
   });
   highlight();
 }
-function highlight() {
-  [...$("sessions").children].forEach((li) => li.classList.toggle("active", li._id === activeSession));
-}
+function highlight() { [...$("sessions").children].forEach((li) => li.classList.toggle("active", li._id === activeSession)); }
 async function loadPanels() {
   await loadSessions();
   fillList("tools", await safe("/api/tools"), (t) => t.name, (t) => t.description);

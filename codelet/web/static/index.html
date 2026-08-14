@@ -12,30 +12,34 @@
     <aside id="sidebar">
       <div class="side-top">
         <div class="brand"><span class="logo">◆</span> codelet</div>
-        <button id="new-chat" class="new-chat">＋ New chat</button>
+        <button id="new-chat" class="new-chat">
+          <svg class="ic" viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+          <span>New chat</span>
+        </button>
       </div>
 
       <div class="side-scroll">
-        <section class="ws-card">
-          <div class="ws-label">Workspace</div>
-          <div class="ws-row">
-            <div class="ws-name" id="ws-name" title="">—</div>
-            <button id="ws-change" class="ghost sm">Change</button>
-          </div>
-          <div class="ws-path" id="ws-path"></div>
-        </section>
-
-        <section class="side-section">
-          <div class="side-h">Conversations</div>
+        <details class="nav" open>
+          <summary>
+            <svg class="ic" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            <span>Conversations</span><svg class="chev" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>
+          </summary>
           <ul id="sessions" class="list"></ul>
-        </section>
+        </details>
 
-        <details class="side-section">
-          <summary class="side-h">Tools</summary>
+        <details class="nav">
+          <summary>
+            <svg class="ic" viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+            <span>Tools</span><svg class="chev" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>
+          </summary>
           <ul id="tools" class="list compact"></ul>
         </details>
-        <details class="side-section">
-          <summary class="side-h">Skills</summary>
+
+        <details class="nav">
+          <summary>
+            <svg class="ic" viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+            <span>Skills</span><svg class="chev" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>
+          </summary>
           <ul id="skills" class="list compact"></ul>
         </details>
       </div>
@@ -49,24 +53,14 @@
     <!-- ───────────── main ───────────── -->
     <main id="main">
       <header id="topbar">
-        <div class="seg">
-          <label class="fld">
-            <span>Model</span>
-            <select id="model"></select>
-          </label>
-          <label class="fld">
-            <span>Mode</span>
-            <select id="mode">
-              <option value="ask">ask</option>
-              <option value="auto">auto</option>
-              <option value="plan">plan</option>
-            </select>
-          </label>
+        <div class="tel">
+          <span class="tl">Turn</span>
+          <b id="tt-in">0</b><span class="u">in</span> · <b id="tt-out">0</b><span class="u">out</span>
         </div>
-        <div id="telemetry" class="telemetry">
-          <span title="this turn">turn <b id="tel-turn">0 / 0</b></span>
-          <span title="session tokens in / out">session <b id="tel-session">0 / 0</b></span>
-          <span title="session cost"><b id="tel-cost">n/a</b></span>
+        <div class="tel">
+          <span class="tl">Session</span>
+          <b id="ts-in">0</b><span class="u">in</span> · <b id="ts-out">0</b><span class="u">out</span>
+          · <b id="ts-cost" title="estimated from settings.json pricing">n/a</b>
         </div>
       </header>
 
@@ -75,16 +69,38 @@
         <div id="empty" class="empty">
           <div class="empty-logo">◆</div>
           <div class="empty-title">codelet</div>
-          <div class="empty-sub">Ask about the code, or tell it what to build. It works in your selected workspace.</div>
+          <div class="empty-sub">Ask about the code, or tell it what to build — it works in your selected workspace.</div>
         </div>
       </div>
 
-      <form id="composer">
-        <div class="composer-inner">
-          <textarea id="input" rows="1" placeholder="Message codelet…  (Enter to send · Shift+Enter for newline)"></textarea>
-          <button id="send" type="submit" title="Send">➤</button>
+      <div id="dock">
+        <div class="controls">
+          <button id="ws-chip" class="chip" title="change workspace">
+            <svg class="ic" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+            <span id="ws-name">—</span>
+          </button>
+          <select id="model" class="pill" title="model"></select>
+          <select id="mode" class="pill" title="permission mode">
+            <option value="ask">ask</option>
+            <option value="auto">auto</option>
+            <option value="plan">plan</option>
+          </select>
         </div>
-      </form>
+
+        <form id="composer">
+          <div id="attachments" class="attachments"></div>
+          <div class="composer-inner">
+            <button id="attach" type="button" class="icon-btn" title="attach files or images">
+              <svg class="ic" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            </button>
+            <textarea id="input" rows="1" placeholder="Message codelet…  (Enter to send · Shift+Enter for newline)"></textarea>
+            <button id="send" type="submit" class="send" title="send">
+              <svg class="ic" viewBox="0 0 24 24"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
+            </button>
+          </div>
+          <input id="file-input" type="file" multiple hidden />
+        </form>
+      </div>
     </main>
   </div>
 

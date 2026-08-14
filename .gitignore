@@ -13,6 +13,9 @@ dist/
 # Per-project session registry (machine-local; references global snapshots)
 .codelet/sessions.json
 
+# Web GUI file/image uploads (machine-local)
+.codelet/uploads/
+
 # Eval run reports
 evals/reports/
 evals/swebench/out/

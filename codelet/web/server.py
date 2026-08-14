@@ -22,7 +22,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from rich.console import Console
@@ -386,6 +386,23 @@ def create_app() -> FastAPI:
             "models": models,
             "profiles": sorted((settings.get("profiles") or {}).keys()),
         }
+
+    _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"}
+
+    @app.post("/api/upload")
+    async def api_upload(files: list[UploadFile] = File(...)) -> dict[str, Any]:
+        """Save attachments into the current workspace's .codelet/uploads/<id>/ so the
+        agent can read them by path. Returns absolute paths for prompt injection."""
+        dest = Path.cwd() / ".codelet" / "uploads" / uuid.uuid4().hex[:8]
+        dest.mkdir(parents=True, exist_ok=True)
+        saved = []
+        for f in files:
+            name = Path(f.filename or "file").name
+            p = dest / name
+            p.write_bytes(await f.read())
+            saved.append({"name": name, "path": str(p.resolve()),
+                          "is_image": p.suffix.lower() in _IMAGE_EXTS})
+        return {"files": saved}
 
     @app.get("/api/browse")
     def api_browse(path: str = "") -> dict[str, Any]:
