@@ -15,7 +15,8 @@ Session 持久化 / Slash 命令模板 / Diff 预览**。
 - [运行时流程图](docs/flow-diagrams.md) — 9 张 mermaid 时序图覆盖关键路径
 - [技术细节深入](docs/technical-details.md) — 12 个有坑的实现点
 - [面试式 Q&A](docs/interview-qa.md) — 30 个设计权衡问题
-- [实现路线图](docs/implementation-plan.md) — P1→P5 phase 划分
+- [实现路线图](docs/implementation-plan.md) — phase 划分
+- [插件架构](docs/plugin-architecture.md) — 插件接口 + 内置 sandbox / rag（P8）
 
 ## 当前进度
 
@@ -149,9 +150,13 @@ REPL 内置命令：
 `./.codelet/commands/<name>.md` 或 `~/.codelet/commands/<name>.md`，
 通过 `/<name> args` 调用。命令体支持 `{args}` `{1}` `{2}` 占位。
 
-## Web GUI（图形界面，P7）
+## Web GUI（图形界面，P7 + P8）
 
 一个本地 Web 界面,浏览器里聊天,和 REPL 同一套 `AgentLoop`:
+
+![codelet web GUI](docs/ui-preview.svg)
+
+> 上图为界面示意(SVG);想放真实截图就把 `docs/ui-preview.svg` 换成你的 `docs/ui-preview.png` 并改下方链接。
 
 ```bash
 pip install -e ".[web]"
@@ -159,18 +164,31 @@ python -m codelet.web            # 起服务并自动打开浏览器（--no-open
 # 或一键脚本： ./run-web.ps1        (Windows)   /   ./run-web.sh   (macOS/Linux)
 ```
 
-- **流式输出**:token 实时逐字显示(WebSocket)
-- **模型切换**:顶栏下拉直接换模型(列表来自 `.env` 的 `LLM_MODELS`;代理场景下 base_url/api_key 不变,只换模型名)
-- **新建对话 / 选工作区**:侧栏 `＋ New chat` 开新会话;`Workspace → Change` 弹目录选择器,切到别的项目目录(agent 的文件工具、`.codelet` skills/CLAUDE.md、会话都随之切换)
+**聊天与执行**
+- **流式输出**:token 实时逐字显示(WebSocket)+ 等待指示
 - **工具可见**:每次工具调用渲染成卡片(参数 + 结果,按成功/失败着色)
-- **权限审批**:ASK 模式下 `write_file`/`edit_file` 弹 **diff 预览** + Approve/Reject;AUTO 模式直接执行。顶栏可实时切换
-- **会话/遥测**:侧栏列出当前项目的会话(点击恢复);顶栏看 token/成本
-- 纯原生 HTML/JS,无构建链;只绑 `127.0.0.1`(本地)
+- **权限审批**:ASK 模式下 `write_file`/`edit_file` 弹 **diff 预览** + Approve/Reject;AUTO 直接执行;顶栏实时切换
+- **图片多模态**:composer 的 **＋** 可上传文件/图片;图片作为 vision content block 发给模型(需视觉模型),其它文件以路径注入让 agent 读
+
+**顶栏 / composer 上方控件**
+- **模型切换**:下拉直接换模型(列表来自 `.env` 的 `LLM_MODELS`;代理场景 base_url/api_key 不变,只换模型名)
+- **模式切换**:ask / auto / plan
+- **工作区**:`📁` chip 弹目录选择器(可浏览**任意盘符**),切到别的项目 —— 文件工具、`.codelet` skills/CLAUDE.md、会话随之切换
+- **Token/成本读数**:Turn 与 Session 的 in/out tokens + 预估成本(据 `settings.json` 的 `pricing`)
+
+**侧栏**
+- **＋ New chat**:开新会话
+- **Conversations**(可折叠):当前项目会话列表,点击恢复,悬停有 **✎ 重命名 / 🗑 删除**
+- **Tools / Skills**(可折叠):每项一个复选框**热插拔**开关 —— 关掉的工具对模型隐藏、关掉的技能移出系统提示词索引;插件工具(如 rag 的 `search_docs`、`sandbox`)也在此列出
+- **用户名**(占位,预留登录)+ **⏻ Quit**(停掉后端服务)
+
+纯原生 HTML/JS,无构建链;只绑 `127.0.0.1`(本地)。
 
 实现上,核心 `AgentLoop` 通过一个极小的 [`events.py`](codelet/events.py) `AgentSink`
 把 UI 事件解耦出来:CLI 用 `RichSink`(终端输出不变),Web 用把事件序列化成
 WebSocket 帧的 sink。diff 审批的回调支持 async(浏览器点击才继续)。Web 层单独放在
-[`codelet/web/`](codelet/web/),不进核心的 ≤3000 行。
+[`codelet/web/`](codelet/web/),不进核心的 ≤3000 行。插件系统见
+[docs/plugin-architecture.md](docs/plugin-architecture.md)。
 
 ## 预置的 profiles 速查
 

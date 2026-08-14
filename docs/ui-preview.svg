@@ -1,0 +1,97 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="700" viewBox="0 0 1180 700" font-family="system-ui, 'Segoe UI', Roboto, sans-serif">
+  <defs>
+    <style>
+      .muted{fill:#a0a0a9}.faint{fill:#74747d}.text{fill:#ececf0}.acc{fill:#1fb894}
+      .mono{font-family:ui-monospace,Consolas,monospace}
+      .h{font-size:11px;letter-spacing:.06em;fill:#74747d;font-weight:700}
+    </style>
+  </defs>
+
+  <!-- background -->
+  <rect width="1180" height="700" fill="#1a1a1d"/>
+  <rect width="264" height="700" fill="#161719"/>
+  <line x1="264" y1="0" x2="264" y2="700" stroke="#33343a"/>
+
+  <!-- ===== sidebar ===== -->
+  <text x="20" y="40" class="text" font-size="17" font-weight="700"><tspan class="acc">◆</tspan> codelet</text>
+  <!-- new chat -->
+  <rect x="14" y="56" width="236" height="38" rx="10" fill="#212226" stroke="#43444c"/>
+  <text x="34" y="80" class="text" font-size="13.5" font-weight="600">✎  New chat</text>
+
+  <!-- conversations (collapsed) -->
+  <text x="24" y="128" class="h">▸  CONVERSATIONS</text>
+
+  <!-- tools -->
+  <text x="24" y="164" class="h">▾  TOOLS</text>
+  <g font-size="12.5" class="mono">
+    <rect x="18" y="176" width="12" height="12" rx="3" fill="#1fb894"/><text x="38" y="186" class="text">bash</text>
+    <rect x="18" y="196" width="12" height="12" rx="3" fill="#1fb894"/><text x="38" y="206" class="text">read_file</text>
+    <rect x="18" y="216" width="12" height="12" rx="3" fill="#1fb894"/><text x="38" y="226" class="text">edit_file</text>
+    <rect x="18" y="236" width="12" height="12" rx="3" fill="#1fb894"/><text x="38" y="246" class="acc">search_docs</text>
+    <rect x="18" y="256" width="12" height="12" rx="3" fill="none" stroke="#43444c"/><text x="38" y="266" class="faint" text-decoration="line-through">sandbox</text>
+  </g>
+
+  <!-- skills -->
+  <text x="24" y="300" class="h">▸  SKILLS</text>
+
+  <!-- footer user -->
+  <line x1="0" y1="660" x2="264" y2="660" stroke="#33343a"/>
+  <circle cx="28" cy="681" r="10" fill="#1fb894"/><text x="28" y="685" fill="#fff" font-size="11" font-weight="700" text-anchor="middle">M</text>
+  <text x="46" y="685" class="text" font-size="12.5" font-weight="500">muamuauh</text>
+  <text x="238" y="686" class="faint" font-size="13">⏻</text>
+
+  <!-- ===== top bar (telemetry) ===== -->
+  <line x1="264" y1="46" x2="1180" y2="46" stroke="#33343a"/>
+  <text x="1164" y="30" text-anchor="end" font-size="12.5">
+    <tspan class="faint" font-weight="700">TURN </tspan><tspan class="text">1,204</tspan><tspan class="faint"> in · </tspan><tspan class="text">88</tspan><tspan class="faint"> out</tspan>
+    <tspan class="faint" font-weight="700">    SESSION </tspan><tspan class="text">42,331</tspan><tspan class="faint"> in · </tspan><tspan class="text">2,540</tspan><tspan class="faint"> out · </tspan><tspan class="text">~$0.08</tspan>
+  </text>
+
+  <!-- ===== chat ===== -->
+  <!-- user -->
+  <rect x="360" y="78" width="26" height="26" rx="7" fill="#2a2b30"/><text x="373" y="96" class="muted" font-size="12" font-weight="700" text-anchor="middle">U</text>
+  <text x="398" y="90" class="faint" font-size="12">You</text>
+  <rect x="398" y="98" width="470" height="34" rx="10" fill="#2a2c33"/>
+  <text x="412" y="120" class="text" font-size="14">Add a /health endpoint and a test for it.</text>
+
+  <!-- assistant -->
+  <rect x="360" y="158" width="26" height="26" rx="7" fill="#1fb894"/><text x="373" y="176" fill="#fff" font-size="12" text-anchor="middle">◆</text>
+  <text x="398" y="170" class="faint" font-size="12">codelet</text>
+  <text x="398" y="192" class="text" font-size="14">I'll add the route and a test, then run the suite.</text>
+
+  <!-- tool card 1 -->
+  <rect x="398" y="206" width="620" height="60" rx="10" fill="#212226" stroke="#33343a"/>
+  <text x="412" y="226" class="mono text" font-size="13" font-weight="600">edit_file</text>
+  <rect x="966" y="214" width="38" height="16" rx="8" fill="#4ade80"/><text x="985" y="226" fill="#0b1f12" font-size="10" text-anchor="middle" font-weight="700">ok</text>
+  <line x1="398" y1="238" x2="1018" y2="238" stroke="#33343a"/>
+  <text x="412" y="256" class="mono muted" font-size="12">app/api.py  ·  +12 −0</text>
+
+  <!-- tool card 2 (running) -->
+  <rect x="398" y="276" width="620" height="42" rx="10" fill="#212226" stroke="#33343a"/>
+  <text x="412" y="302" class="mono text" font-size="13" font-weight="600">bash</text>
+  <rect x="946" y="286" width="58" height="16" rx="8" fill="#74747d"/><text x="975" y="298" fill="#fff" font-size="10" text-anchor="middle" font-weight="700">running</text>
+  <text x="470" y="302" class="mono faint" font-size="12">pytest -q</text>
+
+  <!-- diff-approval modal hint -->
+  <rect x="398" y="336" width="620" height="120" rx="12" fill="#1e1f23" stroke="#43444c"/>
+  <text x="414" y="360" class="text" font-size="13.5" font-weight="600">Apply this change via <tspan class="acc mono">write_file</tspan>?</text>
+  <rect x="414" y="372" width="588" height="46" rx="8" fill="#26262b"/>
+  <text x="424" y="390" class="mono" font-size="11.5" fill="#7ee2a0">+ @app.get("/health")</text>
+  <text x="424" y="406" class="mono" font-size="11.5" fill="#7ee2a0">+ def health(): return {"ok": True}</text>
+  <rect x="838" y="428" width="76" height="22" rx="7" fill="#2a2b30" stroke="#43444c"/><text x="876" y="443" class="text" font-size="12" text-anchor="middle">Reject</text>
+  <rect x="922" y="428" width="80" height="22" rx="7" fill="#1fb894"/><text x="962" y="443" fill="#fff" font-size="12" text-anchor="middle" font-weight="600">Approve</text>
+
+  <!-- ===== controls row ===== -->
+  <rect x="398" y="592" width="132" height="30" rx="15" fill="#212226" stroke="#43444c"/>
+  <text x="418" y="611" class="acc" font-size="12">📁</text><text x="436" y="611" class="text" font-size="12.5" font-weight="600">codelet</text>
+  <rect x="540" y="592" width="230" height="30" rx="15" fill="#212226" stroke="#43444c"/>
+  <text x="558" y="611" class="text mono" font-size="12.5">openai/gpt-5.6-luna ▾</text>
+  <rect x="780" y="592" width="74" height="30" rx="15" fill="#212226" stroke="#43444c"/>
+  <text x="798" y="611" class="text" font-size="12.5">ask ▾</text>
+
+  <!-- ===== composer ===== -->
+  <rect x="398" y="632" width="620" height="46" rx="16" fill="#212226" stroke="#43444c"/>
+  <text x="418" y="660" class="muted" font-size="18">+</text>
+  <text x="446" y="659" class="faint" font-size="14">Message codelet…</text>
+  <rect x="978" y="642" width="30" height="26" rx="9" fill="#1fb894"/><text x="993" y="660" fill="#fff" font-size="14" text-anchor="middle">↑</text>
+</svg>
