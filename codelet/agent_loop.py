@@ -39,6 +39,7 @@ from .hooks.runner import HookRunner
 from .llm.base import LLMClient, LLMResponse, ToolCall
 from .llm.factory import build_client
 from .permissions import PermissionGate
+from .plugins.loader import apply_plugins
 from .skills.loader import SkillIndex, load_skills
 from .system_prompt import build_system_prompt
 from .telemetry import Telemetry
@@ -192,17 +193,20 @@ class AgentLoop:
         # correct depth.
         self._wire_dynamic_tools(allowed_tools)
 
+        # Plugins (P8): register tools + collect prompt/tool middleware + prompt
+        # sections. Applied to the root agent only for now; subagents inherit the
+        # plugin-registered tools via the copied registry.
+        self._prompt_sections: list[str] = []
+        self._prompt_middleware: list[Callable[[str], str]] = []
+        self._tool_middleware: list[Callable[..., Any]] = []
+        if not _is_subagent:
+            self._apply_plugins()
+
         # SubAgents skip CLAUDE.md: their instructions come from the spawn prompt.
         # The runner overwrites the system prompt afterwards anyway, but we
         # set a sensible default here for the non-subagent case.
         if not _is_subagent:
-            system_prompt = build_system_prompt(
-                self.registry,
-                permission_mode=self.config.permission_mode.value,
-                skill_index=self.skill_index,
-                model=self.config.model,
-            )
-            self.context.set_system_prompt(system_prompt)
+            self.rebuild_system_prompt()
 
     # ---------- public API ----------
 
@@ -210,7 +214,10 @@ class AgentLoop:
         """Synchronous wrapper for REPL use."""
         return asyncio.run(self.run_async(user_message))
 
-    async def run_async(self, user_message: str) -> str:
+    async def run_async(self, user_message: str, images: list[dict[str, Any]] | None = None) -> str:
+        """Run one user turn. `images` are Anthropic-shaped image content blocks
+        (`{"type":"image","source":{...}}`) attached to the user message for
+        vision-capable models."""
         # Mark a fresh user-turn boundary so telemetry can break this turn out
         # from cumulative session totals.
         self.telemetry.begin_user_turn()
@@ -226,7 +233,21 @@ class AgentLoop:
             if "prompt" in outcome.overrides:
                 user_message = str(outcome.overrides["prompt"])
 
-        self.context.add_user_message(user_message)
+        # Plugin prompt middleware (e.g. RAG context injection). Non-fatal.
+        for mw in self._prompt_middleware:
+            try:
+                user_message = str(mw(user_message))
+            except Exception as exc:
+                self._sink.notice(f"plugin prompt hook failed: {exc}", level="dim")
+
+        if images:
+            content: list[dict[str, Any]] = []
+            if user_message:
+                content.append({"type": "text", "text": user_message})
+            content.extend(images)
+            self.context.add_user_message(content)
+        else:
+            self.context.add_user_message(user_message)
         final_text = ""
 
         for _turn in range(self.config.max_turns):
@@ -284,6 +305,44 @@ class AgentLoop:
             # we'd advertise an empty capability and waste tokens.
             maybe("skill", lambda: SkillTool(self.skill_index))
         maybe("todo_write", lambda: TodoWriteTool(self.todo_store))
+
+    def _apply_plugins(self) -> None:
+        """Discover + apply plugins to this loop. Failures are non-fatal."""
+        try:
+            applied = apply_plugins(self.registry, self.config.plugins)
+        except Exception as exc:  # never let a plugin crash startup
+            self._sink.notice(f"plugins skipped: {exc}", level="dim")
+            return
+        self._prompt_sections = applied.prompt_sections
+        self._prompt_middleware = applied.prompt_middleware
+        self._tool_middleware = applied.tool_middleware
+
+    def rebuild_system_prompt(self) -> None:
+        """(Re)build the system prompt from the current registry/mode/model, plus
+        any plugin-contributed sections. Callers use this after a runtime switch."""
+        self.context.set_system_prompt(build_system_prompt(
+            self.registry,
+            permission_mode=self.config.permission_mode.value,
+            skill_index=self.skill_index,
+            model=self.config.model,
+            sections=self._prompt_sections,
+        ))
+
+    async def _exec_with_middleware(self, name: str, tool: Any, tool_input: dict[str, Any]) -> ToolResult:
+        """Run tool.aexecute through the plugin `wrap_tool` middleware chain."""
+        async def base() -> ToolResult:
+            return await tool.aexecute(tool_input)
+
+        call_next = base
+        for mw in reversed(self._tool_middleware):
+            call_next = self._link_mw(mw, name, tool_input, call_next)
+        return await call_next()
+
+    @staticmethod
+    def _link_mw(mw: Any, name: str, tool_input: dict[str, Any], nxt: Any) -> Any:
+        async def _c() -> ToolResult:
+            return await mw(name, tool_input, nxt)
+        return _c
 
     async def _call_llm(self) -> tuple[LLMResponse, bool]:
         """Run one LLM call. Returns (response, streamed_text).
@@ -442,7 +501,7 @@ class AgentLoop:
                     return self._error_result(call.id, "User rejected the proposed change.")
 
         try:
-            result: ToolResult = await tool.aexecute(tool_input)
+            result: ToolResult = await self._exec_with_middleware(call.name, tool, tool_input)
         except Exception as exc:
             result = ToolResult(output=f"Tool raised: {exc}", is_error=True)
 

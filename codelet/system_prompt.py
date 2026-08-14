@@ -44,6 +44,7 @@ def build_system_prompt(
     project_dir: str | None = None,
     skill_index: SkillIndex | None = None,
     model: str | None = None,
+    sections: list[str] | None = None,
 ) -> str:
     tool_list = "\n".join(
         f"- **{t.name}**: {t.description}" for t in registry.all_tools()
@@ -67,6 +68,12 @@ def build_system_prompt(
     if instructions:
         project_section = f"\n## Project Instructions (CLAUDE.md)\n\n{instructions}"
 
+    # Plugin-contributed sections (e.g. a sandbox notice, RAG capabilities).
+    plugin_section = ""
+    for text in sections or []:
+        if text and text.strip():
+            plugin_section += f"\n\n{text.strip()}"
+
     return SYSTEM_PROMPT_TEMPLATE.format(
         model_section=model_section,
         tool_list=tool_list,
@@ -74,4 +81,4 @@ def build_system_prompt(
         mode_description=MODE_DESCRIPTIONS.get(permission_mode, ""),
         skill_section=skill_section,
         project_instructions=project_section,
-    ).strip()
+    ).strip() + plugin_section

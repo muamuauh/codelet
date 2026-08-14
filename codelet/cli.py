@@ -108,6 +108,8 @@ def _build_config(args: argparse.Namespace, settings: dict[str, Any]) -> Config:
         cfg.hooks = settings["hooks"]
     if "pricing" in settings and isinstance(settings["pricing"], dict):
         cfg.pricing_overrides = settings["pricing"]
+    if "plugins" in settings and isinstance(settings["plugins"], dict):
+        cfg.plugins = settings["plugins"]
 
     # ---- profile layer (provider, model, base_url, api_key) ----
     profile = resolve_profile(settings, args.profile)

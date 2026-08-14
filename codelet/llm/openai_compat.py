@@ -273,6 +273,19 @@ class OpenAICompatClient(LLMClient):
                             "tool_call_id": tr.get("tool_use_id", ""),
                             "content": str(body if body is not None else ""),
                         })
+                elif any(isinstance(b, dict) and b.get("type") == "image" for b in content):
+                    # Multimodal user turn: text + image parts (OpenAI vision shape).
+                    parts: list[dict[str, Any]] = []
+                    for b in content:
+                        if not isinstance(b, dict):
+                            continue
+                        if b.get("type") == "text":
+                            parts.append({"type": "text", "text": b.get("text", "")})
+                        elif b.get("type") == "image":
+                            url = cls._image_url(b.get("source") or {})
+                            if url:
+                                parts.append({"type": "image_url", "image_url": {"url": url}})
+                    out.append({"role": "user", "content": parts})
                 else:
                     text = "".join(
                         b.get("text", "") for b in content
@@ -280,6 +293,16 @@ class OpenAICompatClient(LLMClient):
                     )
                     out.append({"role": "user", "content": text})
         return out
+
+    @staticmethod
+    def _image_url(source: dict[str, Any]) -> str:
+        """Anthropic image `source` block -> OpenAI image_url string."""
+        if source.get("type") == "base64":
+            media = source.get("media_type", "image/png")
+            return f"data:{media};base64,{source.get('data', '')}"
+        if source.get("type") == "url":
+            return str(source.get("url", ""))
+        return ""
 
     # ---------- outbound translation ----------
 

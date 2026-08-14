@@ -1,4 +1,34 @@
-# Plugin Architecture — Plan (P8, proposed)
+# Plugin Architecture (P8)
+
+## Status: v1 implemented
+
+Phases 1–2 of the plan below are built (`codelet/plugins/`):
+`register_tool`, `add_system_prompt_section`, `on_user_prompt` (prompt middleware)
+and `wrap_tool` (async tool-execution middleware) all work and are wired into the
+loop; discovery is entry points + `./.codelet/plugins/*.py` + `~/.codelet/plugins/*.py`,
+curated by the `plugins` block in settings.json. Failures are isolated (skipped
+with a warning). Not yet built: provider/slash-command registration and sub-agent
+middleware inheritance (sub-agents do inherit plugin-registered *tools*).
+
+Minimal working plugin — drop into `.codelet/plugins/audit.py`:
+
+```python
+from codelet.plugins import PluginContext
+
+class AuditPlugin:
+    name = "audit"
+    def setup(self, ctx: PluginContext) -> None:
+        ctx.add_system_prompt_section("An audit plugin is logging every tool call.")
+        async def wrap(name, tool_input, call_next):
+            print(f"[audit] {name} {tool_input}")
+            return await call_next()
+        ctx.wrap_tool(wrap)
+
+PLUGIN = AuditPlugin()   # module-level PLUGIN is what the loader looks for
+```
+
+Enable/curate in settings.json (optional — discovered plugins load by default):
+`{"plugins": {"enabled": ["audit"], "config": {"audit": {}}}}`.
 
 ## Context
 

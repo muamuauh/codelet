@@ -26,8 +26,9 @@ Session 持久化 / Slash 命令模板 / Diff 预览**。
 - [x] **P5** 多 provider profiles（Anthropic / OpenAI 兼容）+ `.env` 加载 + WebFetch + Session 持久化 + Slash 命令模板 + Diff 预览
 - [x] **P6** 实时 token 流式输出 + 等待 spinner + per-project session registry（分区 `/sessions`）+ 执行式 eval 框架 + SWE-bench Lite 适配器
 - [x] **P7** 本地 Web GUI（FastAPI + WebSocket + 原生前端）：流式聊天 + 工具卡片 + diff 审批 + 会话/画像/遥测，核心经 `AgentSink` 解耦
+- [x] **P8** 插件系统（tool / prompt-中间件 / tool-中间件 / system-prompt 段；entry-point + `.codelet/plugins/` 发现，见 [docs/plugin-architecture.md](docs/plugin-architecture.md)）+ 图片多模态（Web 上传图片 → vision content block → OpenAI/Anthropic 客户端翻译）
 
-测试：`157 passed`（`pytest -q`）。
+测试：`176 passed`（`pytest -q`）。
 
 ## 环境
 

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Any
 
 
 class PermissionMode(Enum):
@@ -54,6 +55,10 @@ class Config:
 
     # Telemetry pricing overrides (USD per million tokens)
     pricing_overrides: dict[str, dict[str, float]] = field(default_factory=dict)
+
+    # Plugins (P8): the `plugins` block from settings.json --
+    # {"enabled": [...], "config": {name: {...}}}. Empty = no plugins.
+    plugins: dict[str, Any] = field(default_factory=dict)
 
     # Permissions
     permission_mode: PermissionMode = PermissionMode.ASK

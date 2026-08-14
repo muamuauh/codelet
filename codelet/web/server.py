@@ -15,7 +15,9 @@ new_conversation, set_workspace, resume, slash.
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
+import mimetypes
 import os
 import uuid
 from pathlib import Path
@@ -190,7 +192,7 @@ class Connection:
     async def handle(self, frame: dict[str, Any]) -> None:
         kind = frame.get("type")
         if kind == "prompt":
-            await self._on_prompt(str(frame.get("text", "")))
+            await self._on_prompt(str(frame.get("text", "")), frame.get("attachments") or [])
         elif kind in ("approve", "reject"):
             fut = self.pending.get(str(frame.get("id")))
             if fut is not None and not fut.done():
@@ -210,8 +212,28 @@ class Connection:
         elif kind == "slash":
             await self._on_slash(str(frame.get("line", "")))
 
-    async def _on_prompt(self, text: str) -> None:
-        if not text.strip():
+    async def _on_prompt(self, text: str, attachments: list[dict[str, Any]] | None = None) -> None:
+        attachments = attachments or []
+        # Image attachments -> vision content blocks; other files -> a path note the
+        # agent can read with its tools.
+        images: list[dict[str, Any]] = []
+        file_notes: list[str] = []
+        for a in attachments:
+            path = a.get("path")
+            if not path:
+                continue
+            block = _image_block(path) if a.get("is_image") else None
+            if block is not None:
+                images.append(block)
+            else:
+                file_notes.append(path)
+        prompt = text
+        if file_notes:
+            prompt = (text + "\n\n" if text else "") + \
+                "[Attached files — read them if relevant:\n" + \
+                "\n".join("- " + p for p in file_notes) + "\n]"
+
+        if not prompt.strip() and not images:
             return
         if self.busy:
             self.send({"type": "notice", "message": "still working on the previous turn",
@@ -219,7 +241,7 @@ class Connection:
             return
         self.busy = True
         try:
-            await self.agent.run_async(text)
+            await self.agent.run_async(prompt, images=images or None)
             self.send({"type": "telemetry", **self.agent.telemetry.snapshot()})
             if self.store is not None:
                 with contextlib.suppress(Exception):
@@ -242,14 +264,9 @@ class Connection:
         await self._on_prompt(expand_command(user_cmd, rest))
 
     def _refresh_system_prompt(self) -> None:
-        """Rebuild the system prompt so its mode + model lines reflect the current
-        config after a runtime mode/profile switch."""
-        self.agent.context.set_system_prompt(build_system_prompt(
-            self.agent.registry,
-            permission_mode=self.agent.config.permission_mode.value,
-            skill_index=self.agent.skill_index,
-            model=self.agent.config.model,
-        ))
+        """Rebuild the system prompt so its mode + model lines (and plugin
+        sections) reflect the current config after a runtime mode/profile switch."""
+        self.agent.rebuild_system_prompt()
 
     def _set_mode(self, mode: str) -> None:
         if mode in ("ask", "auto", "plan"):
@@ -336,6 +353,22 @@ class Connection:
 
     def _workspace_data(self) -> dict[str, Any]:
         return {"cwd": self.workspace, "name": os.path.basename(self.workspace) or self.workspace}
+
+
+def _image_block(path: str) -> dict[str, Any] | None:
+    """Read an image file into an Anthropic-shaped base64 image content block.
+    Returns None if it can't be read (falls back to a path note)."""
+    try:
+        data = Path(path).read_bytes()
+    except OSError:
+        return None
+    media = mimetypes.guess_type(path)[0] or "image/png"
+    if not media.startswith("image/"):
+        return None
+    return {"type": "image", "source": {
+        "type": "base64", "media_type": media,
+        "data": base64.b64encode(data).decode("ascii"),
+    }}
 
 
 def _transcript(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:

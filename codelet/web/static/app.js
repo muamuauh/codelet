@@ -180,11 +180,6 @@ function submit() {
   const text = $("input").value.trim();
   if ((!text && !attachments.length) || busy) return;
   const atts = attachments.slice();
-  let prompt = text;
-  if (atts.length) {
-    const lines = atts.map((a) => "- " + a.path).join("\n");
-    prompt = (text ? text + "\n\n" : "") + "[Attached files — read them if relevant:\n" + lines + "\n]";
-  }
   const b = addMessage("user");
   b.bubble.textContent = text || "(sent attachments)";
   if (atts.length) {
@@ -197,7 +192,13 @@ function submit() {
   }
   $("input").value = ""; $("input").style.height = "auto"; attachments = []; renderAttachments();
   current = null; setBusy(true);
-  send(text.startsWith("/") && !atts.length ? { type: "slash", line: text } : { type: "prompt", text: prompt });
+  // Server turns image attachments into vision blocks and other files into a
+  // readable path note; slash commands only apply when there are no attachments.
+  if (text.startsWith("/") && !atts.length) {
+    send({ type: "slash", line: text });
+  } else {
+    send({ type: "prompt", text, attachments: atts.map((a) => ({ name: a.name, path: a.path, is_image: a.is_image })) });
+  }
   scroll();
 }
 $("composer").addEventListener("submit", (e) => { e.preventDefault(); submit(); });
