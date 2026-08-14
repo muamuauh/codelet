@@ -1,0 +1,24 @@
+# Normalize line endings so a checkout on Windows (core.autocrlf=true is the
+# Git-for-Windows default) can't corrupt files that must stay LF.
+#
+# Without this, a fresh clone/reset on Windows rewrites run-web.sh with CRLF and
+# its shebang breaks under WSL/Linux ("bad interpreter"). The repo already stores
+# LF everywhere; these rules just make that guaranteed rather than incidental.
+
+# Let git decide text vs binary, and store text as LF in the repo.
+* text=auto
+
+# Must be LF in the working tree too -- executed by a POSIX shell.
+*.sh text eol=lf
+
+# Windows-only launchers: keep CRLF so cmd.exe is never surprised.
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# Binary assets: never touch.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
