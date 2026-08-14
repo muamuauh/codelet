@@ -148,8 +148,7 @@ function send(o) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); }
 function connect() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   ws = new WebSocket(`${proto}://${location.host}/ws`);
-  ws.onopen = () => $("conn").classList.add("on");
-  ws.onclose = () => { $("conn").classList.remove("on"); setTimeout(connect, 1500); };
+  ws.onclose = () => { setTimeout(connect, 1500); };
   ws.onmessage = (e) => render(JSON.parse(e.data));
 }
 function setBusy(b) { busy = b; $("send").disabled = b; }
