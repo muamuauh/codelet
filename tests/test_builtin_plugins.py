@@ -16,13 +16,15 @@ def test_builtins_not_auto_loaded():
     assert type(reg.get("bash")).__name__ == "BashTool"  # core bash untouched
 
 
-def test_sandbox_overrides_bash_when_enabled():
+def test_sandbox_adds_separate_tool_when_enabled():
     reg = ToolRegistry()
     reg.register(BashTool())
     applied = apply_plugins(reg, {"enabled": ["sandbox"]})
     assert "sandbox" in applied.names
-    assert type(reg.get("bash")).__name__ == "SandboxBashTool"
-    assert applied.prompt_sections  # a "sandboxed" notice is added
+    # a separate `sandbox` tool is added; the core `bash` is left untouched
+    assert type(reg.get("bash")).__name__ == "BashTool"
+    assert type(reg.get("sandbox")).__name__ == "SandboxTool"
+    assert applied.prompt_sections  # a "sandbox" notice is added
 
 
 def test_rag_indexes_and_searches(tmp_path, monkeypatch):

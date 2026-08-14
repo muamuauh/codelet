@@ -1,13 +1,14 @@
-"""Sandbox plugin: run `bash` inside a throwaway Docker container.
+"""Sandbox plugin: a separate `sandbox` tool that runs a shell command inside a
+throwaway Docker container (the core `bash` tool is left untouched).
 
 Enable in settings.json:
     {"plugins": {"enabled": ["sandbox"],
                  "config": {"sandbox": {"image": "python:3.12-slim", "network": false}}}}
 
-It overrides the core `bash` tool: each command runs in `docker run --rm` with the
-current workspace bind-mounted at /workspace (working dir), so the agent's shell
-can't touch the host outside that folder, and (by default) has no network. Real
-isolation via the container boundary.
+Each command runs in `docker run --rm` with the current workspace bind-mounted at
+/workspace (working dir), so it can't touch the host outside that folder, and (by
+default) has no network. Real isolation via the container boundary. The model sees
+both `bash` (host) and `sandbox` (isolated) and picks per command.
 
 Caveats: needs Docker; each command is a fresh container (no cd/env persistence
 between calls, ~1-2s startup); the first run pulls the image. For a persistent-
@@ -27,23 +28,24 @@ DEFAULT_IMAGE = "python:3.12-slim"
 TIMEOUT_S = 120
 
 
-class SandboxBashTool(Tool):
+class SandboxTool(Tool):
     def __init__(self, image: str, network: bool) -> None:
         self._image = image
         self._network = network
 
     @property
     def name(self) -> str:
-        return "bash"  # overrides the core bash tool
+        return "sandbox"  # a separate tool; the core `bash` stays as-is
 
     @property
     def description(self) -> str:
         net = "with network" if self._network else "no network"
         return (
-            f"Run a shell command inside a sandboxed Docker container "
+            f"Run a shell command inside an isolated Docker container "
             f"(image {self._image}, {net}, workspace mounted at /workspace). "
-            "Each call is a fresh container: state does not persist between commands, "
-            "so chain steps with '&&' in one call when they must share a directory or env."
+            "Like `bash` but sandboxed — prefer it for untrusted, experimental, or "
+            "destructive commands. Each call is a fresh container: state does not "
+            "persist between commands, so chain steps with '&&' in one call."
         )
 
     @property
@@ -86,12 +88,13 @@ class SandboxPlugin:
     def setup(self, ctx: PluginContext) -> None:
         image = str(ctx.config.get("image") or DEFAULT_IMAGE)
         network = bool(ctx.config.get("network", False))
-        ctx.register_tool(SandboxBashTool(image, network))
+        ctx.register_tool(SandboxTool(image, network))
         ctx.add_system_prompt_section(
-            "Shell commands run in a **sandboxed Docker container** "
+            "A **`sandbox`** tool runs shell commands in an isolated Docker container "
             f"(image {image}, workspace at /workspace"
-            f"{'' if network else ', no network'}). Each `bash` call is a fresh "
-            "container with no state carried over — combine dependent steps with '&&'."
+            f"{'' if network else ', no network'}) — use it instead of `bash` for "
+            "untrusted or risky commands. Each call is a fresh container (no state "
+            "carried over), so combine dependent steps with '&&'."
         )
 
 

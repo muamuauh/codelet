@@ -22,9 +22,10 @@ auto-discovered** — enable them by name in settings.json:
                         "rag": {"inject": false, "top_k": 3}}}}
 ```
 
-- **sandbox** — overrides `bash` to run each command in a throwaway Docker
-  container with the workspace bind-mounted at `/workspace` and (by default) no
-  network. Real container isolation; needs Docker; each call is a fresh container
+- **sandbox** — adds a separate `sandbox` tool that runs each command in a
+  throwaway Docker container with the workspace bind-mounted at `/workspace` and
+  (by default) no network. The core `bash` (host) stays; the model picks per
+  command. Real container isolation; needs Docker; each call is a fresh container
   (chain dependent steps with `&&`).
 - **rag** — a `search_docs(query, k)` tool (BM25 over the workspace's file chunks,
   pure-Python, no embedding API), a `/rag` command that rebuilds the index and

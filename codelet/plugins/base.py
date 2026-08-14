@@ -42,8 +42,8 @@ class PluginContext:
         self.commands: dict[str, Callable[[str], str]] = {}
 
     def register_tool(self, tool: Tool) -> None:
-        """Add a tool. Registering a name that already exists overrides it
-        (how a sandbox plugin replaces the core `bash`/`write_file`)."""
+        """Add a tool. Registering a name that already exists overrides it, so a
+        plugin can either add a new capability or replace a core tool by name."""
         self._registry.unregister(tool.name)
         self._registry.register(tool)
 
