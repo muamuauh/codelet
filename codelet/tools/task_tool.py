@@ -86,6 +86,7 @@ class TaskTool(Tool):
             console=self._parent.console,
             hook_runner=self._parent.hooks,
             telemetry=self._parent.telemetry,
+            parent_loop=self._parent,
         )
         spec = SubAgentSpec(
             description=description,

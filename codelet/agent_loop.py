@@ -199,6 +199,7 @@ class AgentLoop:
         self._prompt_sections: list[str] = []
         self._prompt_middleware: list[Callable[[str], str]] = []
         self._tool_middleware: list[Callable[..., Any]] = []
+        self._plugin_commands: dict[str, Callable[[str], str]] = {}
         if not _is_subagent:
             self._apply_plugins()
 
@@ -316,6 +317,26 @@ class AgentLoop:
         self._prompt_sections = applied.prompt_sections
         self._prompt_middleware = applied.prompt_middleware
         self._tool_middleware = applied.tool_middleware
+        self._plugin_commands = applied.commands
+
+    def run_command(self, name: str, args: str = "") -> str | None:
+        """Run a plugin-registered slash command; returns its status string, or
+        None if no such command. The result is shown to the user, not the model."""
+        fn = self._plugin_commands.get(name.lstrip("/"))
+        if fn is None:
+            return None
+        try:
+            return str(fn(args))
+        except Exception as exc:
+            return f"/{name} failed: {exc}"
+
+    def inherit_plugins_from(self, parent: "AgentLoop") -> None:
+        """Sub-agents call this to inherit the parent's plugin middleware, prompt
+        sections, and commands (tools already come via the copied registry)."""
+        self._prompt_sections = list(parent._prompt_sections)
+        self._prompt_middleware = list(parent._prompt_middleware)
+        self._tool_middleware = list(parent._tool_middleware)
+        self._plugin_commands = dict(parent._plugin_commands)
 
     def rebuild_system_prompt(self) -> None:
         """(Re)build the system prompt from the current registry/mode/model, plus

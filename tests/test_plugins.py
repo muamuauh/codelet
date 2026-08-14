@@ -120,3 +120,29 @@ def test_tool_middleware_wraps_execution():
     agent._tool_middleware = [wrap]
     agent.run("go")
     assert any(e[0] == "tool_result" and "echo:hi [wrapped]" in e[2] for e in sink.events)
+
+
+def test_run_command_dispatches_to_plugin():
+    agent = _agent(ScriptedClient([]), RecordingSink())
+    agent._plugin_commands = {"greet": lambda args: f"hi {args}"}
+    assert agent.run_command("greet", "there") == "hi there"
+    assert agent.run_command("/greet", "x") == "hi x"     # leading slash tolerated
+    assert agent.run_command("nope") is None              # unknown -> None
+
+
+def test_subagent_inherits_plugin_middleware():
+    parent = _agent(ScriptedClient([]), RecordingSink())
+    marker = object()
+    parent._tool_middleware = [marker]
+    parent._prompt_middleware = [lambda t: t]
+    parent._plugin_commands = {"cmd": lambda a: "ok"}
+    parent._prompt_sections = ["SECTION"]
+
+    child = AgentLoop(config=Config(permission_mode=PermissionMode.AUTO),
+                      registry=ToolRegistry(), client=ScriptedClient([]),
+                      sink=RecordingSink(), _is_subagent=True)
+    assert child._tool_middleware == []                    # subagents don't self-apply
+    child.inherit_plugins_from(parent)
+    assert child._tool_middleware == [marker]
+    assert child._prompt_sections == ["SECTION"]
+    assert child._plugin_commands["cmd"]("") == "ok"

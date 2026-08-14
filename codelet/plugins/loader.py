@@ -13,14 +13,23 @@ never crashes the agent (same contract as hooks / compaction).
 """
 from __future__ import annotations
 
+import importlib
 import importlib.util
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from ..tools.base import ToolRegistry
 from .base import Plugin, PluginContext, PromptMiddleware, ToolMiddleware
+
+# Built-in plugins ship with codelet but load ONLY when named in
+# settings.json plugins.enabled (never auto-discovered -- a sandbox silently
+# overriding bash would be nasty).
+_BUILTIN = {
+    "sandbox": "codelet.plugins.builtin.sandbox",
+    "rag": "codelet.plugins.builtin.rag",
+}
 
 
 @dataclass
@@ -29,6 +38,7 @@ class AppliedPlugins:
     prompt_sections: list[str] = field(default_factory=list)
     prompt_middleware: list[PromptMiddleware] = field(default_factory=list)
     tool_middleware: list[ToolMiddleware] = field(default_factory=list)
+    commands: dict[str, Callable[[str], str]] = field(default_factory=dict)
 
 
 def _warn(msg: str) -> None:
@@ -128,7 +138,7 @@ def apply_plugins(
     order = enabled if enabled is not None else list(by_name.keys())
     applied = AppliedPlugins()
     for name in order:
-        plugin = by_name.get(name)
+        plugin = by_name.get(name) or (_load_builtin(name) if name in _BUILTIN else None)
         if plugin is None:
             if enabled is not None:
                 _warn(f"enabled plugin '{name}' not found")
@@ -143,4 +153,18 @@ def apply_plugins(
         applied.prompt_sections.extend(ctx.prompt_sections)
         applied.prompt_middleware.extend(ctx.prompt_middleware)
         applied.tool_middleware.extend(ctx.tool_middleware)
+        applied.commands.update(ctx.commands)
     return applied
+
+
+def _load_builtin(name: str) -> Plugin | None:
+    try:
+        mod = importlib.import_module(_BUILTIN[name])
+    except Exception as exc:
+        _warn(f"built-in plugin '{name}' failed to import: {exc}")
+        return None
+    obj = getattr(mod, "PLUGIN", None)
+    if obj is None:
+        _warn(f"built-in plugin '{name}' has no PLUGIN")
+        return None
+    return _instantiate(obj)

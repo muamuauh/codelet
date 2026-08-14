@@ -256,8 +256,12 @@ class Connection:
         cmd = line.split(maxsplit=1)
         name = cmd[0].lstrip("/")
         rest = cmd[1] if len(cmd) > 1 else ""
-        commands = load_commands()
-        user_cmd = commands.get(name)
+        # Plugin-registered commands run in-process and return a status string.
+        plugin_result = self.agent.run_command(name, rest)
+        if plugin_result is not None:
+            self.send({"type": "notice", "message": plugin_result, "level": "info"})
+            return
+        user_cmd = load_commands().get(name)
         if user_cmd is None:
             self.send({"type": "notice", "message": f"unknown command: /{name}", "level": "warn"})
             return

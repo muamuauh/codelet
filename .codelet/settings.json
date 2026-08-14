@@ -66,6 +66,13 @@
     "PostToolUse": [],
     "UserPromptSubmit": []
   },
+  "plugins": {
+    "enabled": ["rag"],
+    "config": {
+      "sandbox": {"image": "python:3.12-slim", "network": false},
+      "rag": {"inject": false, "top_k": 3}
+    }
+  },
   "pricing": {
     "claude-sonnet-4-5":   {"input": 3.00, "output": 15.00},
     "claude-haiku-4-5":    {"input": 1.00, "output":  5.00},

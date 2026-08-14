@@ -136,6 +136,7 @@ class SubAgentSession:
         console: Console | None = None,
         hook_runner: HookRunner | None = None,
         telemetry: Telemetry | None = None,
+        parent_loop: "AgentLoop | None" = None,
     ) -> None:
         self._parent_config = parent_config
         self._parent_registry = parent_registry
@@ -147,6 +148,8 @@ class SubAgentSession:
         # subagent token spend rolls into the parent's panel.
         self._hook_runner = hook_runner
         self._telemetry = telemetry
+        # Parent loop (if any) -- used to inherit plugin middleware/commands.
+        self._parent_loop = parent_loop
 
     @property
     def parent_depth(self) -> int:
@@ -191,6 +194,12 @@ class SubAgentSession:
             telemetry=self._telemetry,
             _is_subagent=True,
         )
+        # Inherit the parent's plugin middleware/commands so a sandbox/audit
+        # plugin also wraps the subagent's tool calls (tools already come via
+        # the copied registry).
+        if self._parent_loop is not None:
+            child.inherit_plugins_from(self._parent_loop)
+
         child.context = ConversationContext(config=child_config)
         child.context.depth = self._parent_depth + 1
         child.context.set_system_prompt(_build_subagent_prompt(

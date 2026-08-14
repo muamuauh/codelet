@@ -39,6 +39,7 @@ class PluginContext:
         self.prompt_sections: list[str] = []
         self.prompt_middleware: list[PromptMiddleware] = []
         self.tool_middleware: list[ToolMiddleware] = []
+        self.commands: dict[str, Callable[[str], str]] = {}
 
     def register_tool(self, tool: Tool) -> None:
         """Add a tool. Registering a name that already exists overrides it
@@ -55,3 +56,8 @@ class PluginContext:
 
     def wrap_tool(self, fn: ToolMiddleware) -> None:
         self.tool_middleware.append(fn)
+
+    def register_command(self, name: str, fn: "Callable[[str], str]") -> None:
+        """A slash command `/name args` -> a status string shown to the user
+        (not sent to the model). Used e.g. by RAG for `/rag` index refresh."""
+        self.commands[name.lstrip("/")] = fn

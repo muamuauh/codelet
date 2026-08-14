@@ -369,6 +369,12 @@ def _handle_slash(
         console.print(Panel(BANNER, expand=False, border_style="cyan"))
         return True, None
 
+    # Plugin-registered commands (run in-process; show their status string)
+    plugin_result = agent.run_command(cmd, rest)
+    if plugin_result is not None:
+        console.print(plugin_result)
+        return True, None
+
     # User-defined slash command lookup
     user_cmd_name = cmd.lstrip("/")
     user_cmd = slash_commands.get(user_cmd_name)

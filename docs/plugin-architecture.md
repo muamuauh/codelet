@@ -1,14 +1,35 @@
 # Plugin Architecture (P8)
 
-## Status: v1 implemented
+## Status: implemented
 
-Phases 1–2 of the plan below are built (`codelet/plugins/`):
-`register_tool`, `add_system_prompt_section`, `on_user_prompt` (prompt middleware)
-and `wrap_tool` (async tool-execution middleware) all work and are wired into the
-loop; discovery is entry points + `./.codelet/plugins/*.py` + `~/.codelet/plugins/*.py`,
-curated by the `plugins` block in settings.json. Failures are isolated (skipped
-with a warning). Not yet built: provider/slash-command registration and sub-agent
-middleware inheritance (sub-agents do inherit plugin-registered *tools*).
+Built (`codelet/plugins/`): `register_tool` (name collision overrides a core tool),
+`add_system_prompt_section`, `on_user_prompt` (prompt middleware), `wrap_tool`
+(async tool-execution middleware), and `register_command` (a `/name` slash command
+returning a status string — wired into both the CLI and the web GUI). Discovery is
+entry points (`codelet.plugins`) + `./.codelet/plugins/*.py` + `~/.codelet/plugins/*.py`,
+curated by the `plugins` block in settings.json; failures are isolated. **Sub-agents
+inherit** the parent's tool/prompt middleware, sections, and commands (plus the
+plugin-registered tools via the copied registry). Not yet built: provider registration.
+
+### Built-in plugins (ship with codelet; load only when enabled)
+
+Two reference plugins live in `codelet/plugins/builtin/`. They are **never
+auto-discovered** — enable them by name in settings.json:
+
+```json
+{"plugins": {"enabled": ["sandbox", "rag"],
+             "config": {"sandbox": {"image": "python:3.12-slim", "network": false},
+                        "rag": {"inject": false, "top_k": 3}}}}
+```
+
+- **sandbox** — overrides `bash` to run each command in a throwaway Docker
+  container with the workspace bind-mounted at `/workspace` and (by default) no
+  network. Real container isolation; needs Docker; each call is a fresh container
+  (chain dependent steps with `&&`).
+- **rag** — a `search_docs(query, k)` tool (BM25 over the workspace's file chunks,
+  pure-Python, no embedding API), a `/rag` command that rebuilds the index and
+  reports stats, and — with `"inject": true` — a prompt middleware that prepends the
+  top hits to each message. The index rebuilds when the workspace changes.
 
 Minimal working plugin — drop into `.codelet/plugins/audit.py`:
 
