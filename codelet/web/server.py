@@ -462,9 +462,12 @@ def create_app() -> FastAPI:
 
     @app.get("/api/tools")
     def api_tools() -> list[dict[str, str]]:
+        from ..plugins.loader import apply_plugins
         from ..tools.base import ToolRegistry
-        return [{"name": t.name, "description": t.description}
-                for t in ToolRegistry.default().all_tools()]
+        reg = ToolRegistry.default()
+        with contextlib.suppress(Exception):
+            apply_plugins(reg, settings.get("plugins") or {})  # reflect plugin tools
+        return [{"name": t.name, "description": t.description} for t in reg.all_tools()]
 
     @app.get("/api/skills")
     def api_skills() -> list[dict[str, str]]:
