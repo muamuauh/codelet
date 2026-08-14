@@ -100,7 +100,10 @@ function onTelemetry(ev) {
   $("ts-cost").textContent = s.cost_usd == null ? "n/a" : "~$" + s.cost_usd.toFixed(4);
 }
 function onProfile(ev) {
-  $("provider").textContent = ev.provider + (ev.profile && ev.profile !== "_env" ? " · " + ev.profile : "");
+  if (ev.user) {
+    $("user").textContent = ev.user;
+    $("user-avatar").textContent = (ev.user[0] || "?").toUpperCase();
+  }
   if (ev.mode) $("mode").value = ev.mode;
   const sel = $("model");
   const models = (ev.models && ev.models.length) ? ev.models : (ev.model ? [ev.model] : []);

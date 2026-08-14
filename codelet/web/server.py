@@ -375,12 +375,18 @@ class Connection:
         return {
             "profile": c.profile_name, "provider": c.provider.value, "model": c.model,
             "base_url": c.base_url or "", "mode": c.permission_mode.value,
-            "models": self._env_models(),
+            "models": self._env_models(), "user": _current_user(),
             "profiles": sorted((self.settings.get("profiles") or {}).keys()),
         }
 
     def _workspace_data(self) -> dict[str, Any]:
         return {"cwd": self.workspace, "name": os.path.basename(self.workspace) or self.workspace}
+
+
+def _current_user() -> str:
+    """The signed-in user shown in the GUI. For now a default / env override;
+    a real login flow can replace this (e.g. per-connection identity)."""
+    return os.environ.get("CODELET_USER") or "muamuauh"
 
 
 def _list_drives() -> list[str]:
@@ -452,7 +458,7 @@ def create_app() -> FastAPI:
         return {
             "profile": c.profile_name, "provider": c.provider.value, "model": c.model,
             "base_url": c.base_url or "", "mode": c.permission_mode.value,
-            "models": models,
+            "models": models, "user": _current_user(),
             "profiles": sorted((settings.get("profiles") or {}).keys()),
         }
 
