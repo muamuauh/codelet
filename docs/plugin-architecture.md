@@ -62,6 +62,10 @@ On startup the plugin re-loads every file in the evolved directory, so authored
 tools **persist** across sessions. `/evolve` lists them. Each evolved file is a
 plain plugin module you can read, edit, move into `.codelet/plugins/`, or delete.
 
+In the web GUI the sidebar refreshes live: after any turn that changed the tool set
+the server pushes an updated `tools` frame, so a just-authored tool appears (with its
+enable/disable checkbox) without a reconnect.
+
 **Safety.** Self-authored code runs in-process with full privileges, so the plugin
 is opt-in (built-in, loads only when named in `plugins.enabled`) and off by default.
 In **ASK** mode `create_tool` previews the *generated source* through the normal

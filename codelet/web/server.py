@@ -8,7 +8,9 @@ the core: config composition, session persistence, telemetry, slash commands.
 
 Frames the server sends: text_delta, stream_end, tool_start, tool_result, notice,
 thinking, permission_request, telemetry, turn_done, resumed, profile, workspace,
-cleared, sessions_changed, error.
+tools, skills, cleared, sessions_changed, error. The `tools` frame is (re)sent on
+connect, on a tool toggle, and after any turn that changed the tool set -- so a
+self-authored tool (`create_tool`) appears in the sidebar immediately.
 Frames it receives: prompt, approve, reject, set_mode, set_model, set_profile,
 new_conversation, set_workspace, resume, slash.
 """
@@ -264,6 +266,9 @@ class Connection:
                        "level": "warn"})
             return
         self.busy = True
+        # Snapshot the tool set so we can refresh the sidebar if the turn changed
+        # it -- self-evolution (`create_tool`) registers a new tool mid-turn.
+        tools_before = set(self.agent.registry.names())
         try:
             await self.agent.run_async(prompt, images=images or None)
             self.send({"type": "telemetry", **self.agent.telemetry.snapshot()})
@@ -274,6 +279,9 @@ class Connection:
             self.send({"type": "error", "message": f"{type(exc).__name__}: {exc}"})
         finally:
             self.busy = False
+            # Push an updated tools frame only when the registry actually changed.
+            if set(self.agent.registry.names()) != tools_before:
+                self.send({"type": "tools", "tools": self.agent.tools_state()})
             self.send({"type": "turn_done"})
 
     async def _on_slash(self, line: str) -> None:
