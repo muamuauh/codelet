@@ -157,8 +157,6 @@ REPL 内置命令：
 
 ![codelet web GUI](docs/ui-preview.svg)
 
-> 上图为界面示意(SVG);想放真实截图就把 `docs/ui-preview.svg` 换成你的 `docs/ui-preview.png` 并改下方链接。
-
 ```bash
 pip install -e ".[web]"
 python -m codelet.web            # 起服务并自动打开浏览器（--no-open 关掉）
