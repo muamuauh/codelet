@@ -16,7 +16,7 @@ Session 持久化 / Slash 命令模板 / Diff 预览**。
 - [技术细节深入](docs/technical-details.md) — 12 个有坑的实现点
 - [面试式 Q&A](docs/interview-qa.md) — 30 个设计权衡问题
 - [实现路线图](docs/implementation-plan.md) — phase 划分
-- [插件架构](docs/plugin-architecture.md) — 插件接口 + 内置 sandbox / rag（P8）
+- [插件架构](docs/plugin-architecture.md) — 插件接口 + 内置 sandbox / rag / **evolve 自进化**（P8 / P9）
 
 ## 当前进度
 
@@ -28,8 +28,9 @@ Session 持久化 / Slash 命令模板 / Diff 预览**。
 - [x] **P6** 实时 token 流式输出 + 等待 spinner + per-project session registry（分区 `/sessions`）+ 执行式 eval 框架 + SWE-bench Lite 适配器
 - [x] **P7** 本地 Web GUI（FastAPI + WebSocket + 原生前端）：流式聊天 + 工具卡片 + diff 审批 + 会话/画像/遥测，核心经 `AgentSink` 解耦
 - [x] **P8** 插件系统（tool / prompt-中间件 / tool-中间件 / slash 命令 / system-prompt 段；entry-point + `.codelet/plugins/` 发现，subagent 继承；内置 **sandbox**(独立 Docker 隔离 shell 工具) 与 **rag**(BM25 检索) 插件，见 [docs/plugin-architecture.md](docs/plugin-architecture.md)）+ 图片多模态（Web 上传图片 → vision content block → OpenAI/Anthropic 客户端翻译）
+- [x] **P9** 自进化（self-evolution）：内置 **evolve** 插件提供 `create_tool` 元工具 —— 对话中模型发现缺工具时自己**编写**并经插件系统**热激活**到运行中的会话（下一轮即可调用），落盘 `.codelet/evolved/` 后续启动自动重载；ASK 模式先审阅生成源码、语法/运行错误隔离、核心工具受保护，见 [docs/plugin-architecture.md#self-evolution-the-agent-grows-its-own-tools](docs/plugin-architecture.md)
 
-测试：`182 passed`（`pytest -q`）。
+测试：`196 passed`（`pytest -q`）。
 
 ## 环境
 
@@ -179,7 +180,7 @@ python -m codelet.web            # 起服务并自动打开浏览器（--no-open
 **侧栏**
 - **＋ New chat**:开新会话
 - **Conversations**(可折叠):当前项目会话列表,点击恢复,悬停有 **✎ 重命名 / 🗑 删除**
-- **Tools / Skills**(可折叠):每项一个复选框**热插拔**开关 —— 关掉的工具对模型隐藏、关掉的技能移出系统提示词索引;插件工具(如 rag 的 `search_docs`、`sandbox`)也在此列出
+- **Tools / Skills**(可折叠):每项一个复选框**热插拔**开关 —— 关掉的工具对模型隐藏、关掉的技能移出系统提示词索引;插件工具(如 rag 的 `search_docs`、`sandbox`)也在此列出;开启 **evolve** 后,模型自建的工具(`create_tool` 产物)也会随之出现在这里
 - **用户名**(占位,预留登录)+ **⏻ Quit**(停掉后端服务)
 
 纯原生 HTML/JS,无构建链;只绑 `127.0.0.1`(本地)。

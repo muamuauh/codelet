@@ -48,8 +48,10 @@ from .tools.skill_tool import SkillTool
 from .tools.task_tool import TaskTool
 from .tools.todo_write import TodoStore, TodoWriteTool
 
-# Tools that should pop a diff preview + y/n confirm in ASK mode.
-_DIFF_CONFIRM_TOOLS = {"write_file", "edit_file"}
+# Tools that should pop a diff preview + y/n confirm in ASK mode. `create_tool`
+# (self-evolution) previews the *generated tool source* so the user vets any
+# self-authored code before it is written and hot-loaded.
+_DIFF_CONFIRM_TOOLS = {"write_file", "edit_file", "create_tool"}
 
 # A diff-confirm callback may be sync (CLI y/N prompt) or async (web round-trip).
 ConfirmCallback = Callable[[str, str], Union[bool, Awaitable[bool]]]
@@ -315,7 +317,7 @@ class AgentLoop:
     def _apply_plugins(self) -> None:
         """Discover + apply plugins to this loop. Failures are non-fatal."""
         try:
-            applied = apply_plugins(self.registry, self.config.plugins)
+            applied = apply_plugins(self.registry, self.config.plugins, host=self)
         except Exception as exc:  # never let a plugin crash startup
             self._sink.notice(f"plugins skipped: {exc}", level="dim")
             return
@@ -334,6 +336,32 @@ class AgentLoop:
             return str(fn(args))
         except Exception as exc:
             return f"/{name} failed: {exc}"
+
+    def activate_plugin_file(self, path: "Path") -> list[str]:
+        """Load a single plugin file and apply it to this LIVE loop, then rebuild
+        the system prompt so the model sees any new tools on its next turn.
+
+        Used by the `evolve` self-evolution plugin: the agent authors a tool, we
+        write it to a plugin file, and call this to register it mid-session
+        without a restart. Returns the names of tools newly added to the registry.
+        Raises on load failure so the caller can report it to the model.
+        """
+        from .plugins.loader import _load_from_file
+        from .plugins.base import PluginContext
+
+        plugin = _load_from_file(path)
+        if plugin is None:
+            raise RuntimeError(f"could not load a plugin from {path}")
+        before = set(self.registry.names())
+        ctx = PluginContext(self.registry, {}, host=self)
+        plugin.setup(ctx)  # registers tool(s) into self.registry as a side effect
+        # Merge this plugin's non-registry contributions into the live loop.
+        self._prompt_sections.extend(ctx.prompt_sections)
+        self._prompt_middleware.extend(ctx.prompt_middleware)
+        self._tool_middleware.extend(ctx.tool_middleware)
+        self._plugin_commands.update(ctx.commands)
+        self.rebuild_system_prompt()
+        return [n for n in self.registry.names() if n not in before]
 
     def inherit_plugins_from(self, parent: "AgentLoop") -> None:
         """Sub-agents call this to inherit the parent's plugin middleware, prompt

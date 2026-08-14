@@ -29,6 +29,7 @@ from .base import Plugin, PluginContext, PromptMiddleware, ToolMiddleware
 _BUILTIN = {
     "sandbox": "codelet.plugins.builtin.sandbox",
     "rag": "codelet.plugins.builtin.rag",
+    "evolve": "codelet.plugins.builtin.evolve",
 }
 
 
@@ -122,6 +123,7 @@ def apply_plugins(
     *,
     extra: list[Plugin] | None = None,
     plugin_dirs: list[Path] | None = None,
+    host: Any = None,
 ) -> AppliedPlugins:
     """Discover, filter by settings, run each plugin's setup, and collect the
     aggregate contributions. Registry-level contributions (tools) are applied as
@@ -143,7 +145,7 @@ def apply_plugins(
             if enabled is not None:
                 _warn(f"enabled plugin '{name}' not found")
             continue
-        ctx = PluginContext(registry, per_config.get(name, {}))
+        ctx = PluginContext(registry, per_config.get(name, {}), host=host)
         try:
             plugin.setup(ctx)
         except Exception as exc:

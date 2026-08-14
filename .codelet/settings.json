@@ -67,10 +67,11 @@
     "UserPromptSubmit": []
   },
   "plugins": {
-    "enabled": ["rag", "sandbox"],
+    "enabled": ["rag", "sandbox", "evolve"],
     "config": {
       "sandbox": {"image": "python:3.12-slim", "network": false},
-      "rag": {"inject": false, "top_k": 3}
+      "rag": {"inject": false, "top_k": 3},
+      "evolve": {"dir": ".codelet/evolved"}
     }
   },
   "pricing": {

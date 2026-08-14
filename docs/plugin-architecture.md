@@ -13,13 +13,14 @@ plugin-registered tools via the copied registry). Not yet built: provider regist
 
 ### Built-in plugins (ship with codelet; load only when enabled)
 
-Two reference plugins live in `codelet/plugins/builtin/`. They are **never
+Three reference plugins live in `codelet/plugins/builtin/`. They are **never
 auto-discovered** — enable them by name in settings.json:
 
 ```json
-{"plugins": {"enabled": ["sandbox", "rag"],
+{"plugins": {"enabled": ["sandbox", "rag", "evolve"],
              "config": {"sandbox": {"image": "python:3.12-slim", "network": false},
-                        "rag": {"inject": false, "top_k": 3}}}}
+                        "rag": {"inject": false, "top_k": 3},
+                        "evolve": {"dir": ".codelet/evolved"}}}}
 ```
 
 - **sandbox** — adds a separate `sandbox` tool that runs each command in a
@@ -31,6 +32,53 @@ auto-discovered** — enable them by name in settings.json:
   pure-Python, no embedding API), a `/rag` command that rebuilds the index and
   reports stats, and — with `"inject": true` — a prompt middleware that prepends the
   top hits to each message. The index rebuilds when the workspace changes.
+- **evolve** — self-evolution: a `create_tool` meta-tool that lets the agent author
+  a new tool mid-conversation and hot-load it into the running session. See
+  [Self-evolution](#self-evolution-the-agent-grows-its-own-tools) below.
+
+## Self-evolution: the agent grows its own tools
+
+The **evolve** plugin closes the loop on the plugin system: instead of a human
+writing a plugin file, the *agent* writes one when it hits a capability it lacks,
+and it takes effect immediately.
+
+**Flow.** The plugin registers one meta-tool, `create_tool`, bound to the live
+`AgentLoop` (it reaches the loop through the new `ctx.host` reference). When the
+model calls it with `name` / `description` / `parameters` (a JSON-schema object) /
+`code` (a Python function body over a `params` dict), the tool:
+
+1. Validates the name (must be a fresh snake_case identifier; core tools are
+   protected from being overridden by improvisation).
+2. Renders a complete, readable plugin module — a `Tool` subclass wrapping the
+   authored body plus a module-level `PLUGIN` — and `compile()`s it to reject
+   syntax errors before anything touches disk.
+3. Writes it to the evolved directory (`.codelet/evolved/<name>.py` by default).
+4. Calls `host.activate_plugin_file(path)`, which loads that one file and applies
+   it to the **live** registry, merges any prompt sections / middleware / commands,
+   and rebuilds the system prompt — so the new tool is callable on the agent's very
+   next turn, no restart.
+
+On startup the plugin re-loads every file in the evolved directory, so authored
+tools **persist** across sessions. `/evolve` lists them. Each evolved file is a
+plain plugin module you can read, edit, move into `.codelet/plugins/`, or delete.
+
+**Safety.** Self-authored code runs in-process with full privileges, so the plugin
+is opt-in (built-in, loads only when named in `plugins.enabled`) and off by default.
+In **ASK** mode `create_tool` previews the *generated source* through the normal
+diff-approval flow (it is in `_DIFF_CONFIRM_TOOLS`), so a human vets the code before
+it is written and loaded. The evolved directory is git-ignored by default — copy a
+tool into the repo deliberately to keep it. A broken or buggy evolved tool is
+isolated: a syntax error is reported back to the model to fix, a runtime exception
+is caught and returned as a tool error, and a file that fails to import at startup
+is skipped with a warning instead of crashing the agent.
+
+```
+User: "summarize the word frequencies in README.md"
+Agent → create_tool(name="word_freq", parameters={... "path" ...},
+                    code="import collections, re; ...; return ...")
+        ← "Created and activated tool 'word_freq'. It is now available…"
+Agent → word_freq(path="README.md")   # called on the next turn
+```
 
 Minimal working plugin — drop into `.codelet/plugins/audit.py`:
 
@@ -151,5 +199,8 @@ embeddings backend are plugin-config; nothing leaks into the core.
 
 ## Non-goals (for now)
 
-Hot-reload, a plugin marketplace/versioning, cross-plugin dependency resolution.
-Keep v1 static (loaded at startup), matching the rest of codelet.
+A plugin marketplace/versioning and cross-plugin dependency resolution. Third-party
+plugins stay static (loaded at startup); the one dynamic path is **self-evolution**
+(the evolve plugin hot-activates tools the agent authors into its own evolved
+directory — see above), which is deliberately scoped to that opt-in subsystem rather
+than general hot-reload of arbitrary plugins.

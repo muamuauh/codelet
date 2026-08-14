@@ -16,6 +16,10 @@ dist/
 # Web GUI file/image uploads (machine-local)
 .codelet/uploads/
 
+# Self-evolution: tools the agent authored at runtime (machine-local by default;
+# copy one into .codelet/plugins/ or the repo to keep it deliberately).
+.codelet/evolved/
+
 # Eval run reports
 evals/reports/
 evals/swebench/out/

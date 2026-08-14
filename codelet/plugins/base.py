@@ -9,6 +9,10 @@ calls methods on the `PluginContext` to contribute:
   - `wrap_tool(fn)`                -- async middleware around tool execution:
         async def fn(name, tool_input, call_next) -> ToolResult
   - `ctx.config`                   -- this plugin's dict from settings.json
+  - `ctx.host`                     -- the live AgentLoop (or None), for plugins
+        that hot-activate tools mid-session (see the `evolve` self-evolution
+        plugin, which reaches back through the host to register a just-authored
+        tool into the running registry).
 
 Everything is optional; a plugin uses only what it needs. See
 docs/plugin-architecture.md for worked sandbox / RAG examples.
@@ -33,9 +37,18 @@ class Plugin(Protocol):
 class PluginContext:
     """Handed to each plugin's `setup`; collects its contributions."""
 
-    def __init__(self, registry: ToolRegistry, config: dict[str, Any] | None = None) -> None:
+    def __init__(
+        self,
+        registry: ToolRegistry,
+        config: dict[str, Any] | None = None,
+        host: Any = None,
+    ) -> None:
         self._registry = registry
         self.config: dict[str, Any] = config or {}
+        # The AgentLoop this plugin is being applied to (None in some tests /
+        # for the listing-only registry). Plugins that need to mutate the live
+        # session -- e.g. self-evolution -- use it; most plugins ignore it.
+        self.host: Any = host
         self.prompt_sections: list[str] = []
         self.prompt_middleware: list[PromptMiddleware] = []
         self.tool_middleware: list[ToolMiddleware] = []
