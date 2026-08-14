@@ -30,7 +30,7 @@ Session 持久化 / Slash 命令模板 / Diff 预览**。
 - [x] **P8** 插件系统（tool / prompt-中间件 / tool-中间件 / slash 命令 / system-prompt 段；entry-point + `.codelet/plugins/` 发现，subagent 继承；内置 **sandbox**(独立 Docker 隔离 shell 工具) 与 **rag**(BM25 检索) 插件，见 [docs/plugin-architecture.md](docs/plugin-architecture.md)）+ 图片多模态（Web 上传图片 → vision content block → OpenAI/Anthropic 客户端翻译）
 - [x] **P9** 自进化（self-evolution）：内置 **evolve** 插件提供 `create_tool` 元工具 —— 对话中模型发现缺工具时自己**编写**并经插件系统**热激活**到运行中的会话（下一轮即可调用），落盘 `.codelet/evolved/` 后续启动自动重载；ASK 模式先审阅生成源码、语法/运行错误隔离、核心工具受保护，见 [docs/plugin-architecture.md#self-evolution-the-agent-grows-its-own-tools](docs/plugin-architecture.md)
 
-测试：`196 passed`（`pytest -q`）。
+测试：`198 passed`（`pytest -q`）。
 
 ## 环境
 
@@ -330,7 +330,7 @@ eval / subagent / 一次性 prompt 场景默认关流式（拿完整结果更省
 ## 测试
 
 ```bash
-pytest -q          # 149 passed
+pytest -q          # 198 passed
 ```
 
 ## 目录结构（P1–P6）

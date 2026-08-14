@@ -7,7 +7,7 @@ $py = "python"
 & $py -c "import codelet" 2>$null
 if ($LASTEXITCODE -ne 0) {
     Write-Host "codelet isn't importable by '$py'." -ForegroundColor Yellow
-    Write-Host "Activate the env first (e.g. 'conda activate miniClaudeCode'), or install it:"
+    Write-Host "Activate the env first (e.g. 'conda activate codelet'), or install it:"
     Write-Host "    pip install -e `".[web]`""
     exit 1
 }
