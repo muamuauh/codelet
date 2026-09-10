@@ -28,9 +28,9 @@ Session 持久化 / Slash 命令模板 / Diff 预览**。
 - [x] **P6** 实时 token 流式输出 + 等待 spinner + per-project session registry（分区 `/sessions`）+ 执行式 eval 框架 + SWE-bench Lite 适配器
 - [x] **P7** 本地 Web GUI（FastAPI + WebSocket + 原生前端）：流式聊天 + 工具卡片 + diff 审批 + 会话/画像/遥测，核心经 `AgentSink` 解耦
 - [x] **P8** 插件系统（tool / prompt-中间件 / tool-中间件 / slash 命令 / system-prompt 段；entry-point + `.codelet/plugins/` 发现，subagent 继承；内置 **sandbox**(独立 Docker 隔离 shell 工具) 与 **rag**(BM25 检索) 插件，见 [docs/plugin-architecture.md](docs/plugin-architecture.md)）+ 图片多模态（Web 上传图片 → vision content block → OpenAI/Anthropic 客户端翻译）
-- [x] **P9** 自进化（self-evolution）：内置 **evolve** 插件提供 `create_tool` 元工具 —— 对话中模型发现缺工具时自己**编写**并经插件系统**热激活**到运行中的会话（下一轮即可调用），落盘 `.codelet/evolved/` 后续启动自动重载；ASK 模式先审阅生成源码、语法/运行错误隔离、核心工具受保护，见 [docs/plugin-architecture.md#self-evolution-the-agent-grows-its-own-tools](docs/plugin-architecture.md)
+- [x] **P9** 自进化（self-evolution）：内置 **evolve** 插件提供 `create_tool` 元工具 —— 对话中模型发现缺工具时自己**编写**并经插件系统**热激活**到运行中的会话（下一轮即可调用），落盘 `.codelet/evolved/` 后续启动自动重载；ASK 模式先审阅生成源码、语法/运行错误隔离、核心工具受保护，见 [docs/plugin-architecture.md · 自进化](docs/plugin-architecture.md#自进化agent-自己长出工具)
 
-测试：`198 passed`（`pytest -q`）。
+测试：`199 passed`（`pytest -q`）。
 
 ## 环境
 
@@ -172,7 +172,7 @@ python -m codelet.web            # 起服务并自动打开浏览器（--no-open
 **顶栏 / composer 上方控件**
 - **模型切换**:下拉直接换模型(列表来自 `.env` 的 `LLM_MODELS`;代理场景 base_url/api_key 不变,只换模型名)
 - **模式切换**:ask / auto / plan
-- **工作区**:`📁` chip 弹目录选择器(可浏览**任意盘符**),切到别的项目 —— 文件工具、`.codelet` skills/CLAUDE.md、会话随之切换
+- **工作区**:`📁` chip 弹目录选择器,**从盘符根一层层选起**(C:\ / D:\ …,不再从用户目录起步),切到别的项目 —— 文件工具、`.codelet` skills/CLAUDE.md、会话随之切换
 - **Token/成本读数**:Turn 与 Session 的 in/out tokens + 预估成本(据 `settings.json` 的 `pricing`)
 
 **侧栏**

@@ -115,6 +115,16 @@ def test_browse_lists_visible_dirs(client, tmp_path):
     assert all(e["path"].endswith(e["name"]) for e in r["entries"])
 
 
+def test_browse_defaults_to_drive_list(client):
+    """The picker opens at the very top (drive roots), not the home directory."""
+    r = client.get("/api/browse").json()
+    assert r["is_root"] is True and r["parent"] is None
+    assert r["entries"]                              # C:\, D:\ ... (POSIX: /)
+    assert all(e["name"] == e["path"] for e in r["entries"])
+    # explicitly-empty path behaves the same as no path at all
+    assert client.get("/api/browse", params={"path": ""}).json() == r
+
+
 def test_browse_drives_root(client):
     r = client.get("/api/browse", params={"path": "::drives::"}).json()
     assert r["is_root"] is True and r["parent"] is None

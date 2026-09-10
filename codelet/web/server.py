@@ -331,6 +331,9 @@ class Connection:
     def _set_workspace(self, path: str) -> None:
         """Point the agent at another project directory: chdir, then rebuild so its
         file tools, .codelet skills/CLAUDE.md, and sessions all come from there."""
+        if not path.strip():   # e.g. "Open" clicked while at the drive list
+            self.send({"type": "error", "message": "no workspace selected"})
+            return
         p = Path(path).expanduser()
         if not p.is_dir():
             self.send({"type": "error", "message": f"not a directory: {path}"})
@@ -492,8 +495,12 @@ def create_app() -> FastAPI:
     @app.get("/api/browse")
     def api_browse(path: str = "") -> dict[str, Any]:
         """List subdirectories for the workspace picker. `entries` carry full
-        paths so drive roots (E:\\, D:\\) are navigable, not just C:."""
-        if path == DRIVES:
+        paths so drive roots (E:\\, D:\\) are navigable, not just C:.
+
+        No path (the picker's initial open) lists the drive roots rather than
+        the home directory -- projects live all over the disk, so starting at
+        the very top is one click to any drive instead of climbing out of ~."""
+        if not path or path == DRIVES:
             entries = [{"name": d, "path": d} for d in _list_drives()]
             return {"path": "This PC", "parent": None, "entries": entries, "is_root": True}
         try:

@@ -237,6 +237,7 @@ $("ws-go").addEventListener("click", () => browseTo($("ws-input").value.trim()))
 $("ws-input").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); browseTo($("ws-input").value.trim()); } });
 $("ws-open").addEventListener("click", () => {
   const path = $("ws-input").value.trim() || wsCurrent;
+  if (!path) return;   // at the drive list: pick a drive/folder first
   $("ws-modal").classList.add("hidden");
   send({ type: "set_workspace", path });
 });
