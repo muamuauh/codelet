@@ -255,7 +255,7 @@ sequenceDiagram
         Note over CTX: head = messages[:1] (种子任务)<br/>tail = messages[-keep_recent:]<br/>middle = messages[1:-keep_recent]
         CTX->>LLM: chat(model=compact_model="claude-haiku-4-5",<br/>system="你是上下文总结助手",<br/>user=渲染中段)
         LLM-->>CTX: summary text
-        CTX->>CTX: messages = head + [user("&lt;summary&gt;...")] + tail
+        CTX->>CTX: messages = head + [user("<summary>...")] + tail
         CTX->>CTX: compactions += 1
         CTX-->>LP: True
     end
