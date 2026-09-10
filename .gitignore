@@ -29,3 +29,9 @@ sb-cli-reports/
 # is the template.
 .env
 .env.local
+
+# Obsidian vault metadata (editor-local)
+.obsidian/
+
+# Desktop launcher generated per-machine (hardcodes a local conda env path)
+codelet-web.bat
