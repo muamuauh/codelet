@@ -250,11 +250,13 @@ CLI 参数（`--model` `--mode` `--max-turns` 等）优先级 > settings.json > 
 
 ## Context 压缩（P4）
 
-每个 turn 收尾时估算 token，若超过 `context_window * compact_threshold_ratio`：
+每个 turn 收尾时检查，token 估算超过 `context_window * compact_threshold_ratio`，**或**消息条数达到 `max_context_messages * compact_threshold_ratio`（大量小工具调用时 token 远未到阈值，条数却先到上限）就压缩：
 - 第一条消息（种子任务）保留
-- 最后 `compact_keep_recent` 条保留（不会切断 in-flight 的 tool_use / tool_result 配对）
+- 最后 `compact_keep_recent` 条保留；若这一段恰好以 tool_result 开头，自动多带上它前面的 tool_use，配对永不被切断
 - 中间被一次 Haiku 调用总结成单个 `<conversation_summary>` 块
 - 失败时只打印警告，**不会**让主 agent 崩
+
+`max_context_messages` 是最后的硬上限：超出时直接丢弃中段，但同样不会留下孤立的 tool_result（否则下一次 API 调用会 400）。
 
 ## Telemetry（P4）
 

@@ -114,3 +114,57 @@ async def test_compaction_makes_monotonic_progress():
     assert sizes == sorted(sizes, reverse=True)
     # And it actually fired at least once.
     assert sizes[0] > sizes[-1]
+
+
+def _orphan_tool_results(messages: list) -> list[str]:
+    seen, orphans = set(), []
+    for m in messages:
+        for b in m["content"] if isinstance(m["content"], list) else []:
+            if b.get("type") == "tool_use":
+                seen.add(b["id"])
+            elif b.get("type") == "tool_result" and b["tool_use_id"] not in seen:
+                orphans.append(b["tool_use_id"])
+    return orphans
+
+
+def _populate_tool_rounds(ctx: ConversationContext, n: int) -> None:
+    ctx.add_user_message("seed " + "x" * 200)
+    for i in range(n):
+        ctx.add_assistant_message([{"type": "tool_use", "id": f"t{i}", "name": "grep", "input": {}}])
+        ctx.add_tool_results([{"type": "tool_result", "tool_use_id": f"t{i}", "content": "y" * 200}])
+
+
+@pytest.mark.asyncio
+async def test_odd_keep_recent_widens_tail_to_keep_tool_pair():
+    """keep_recent=3 after a tool round would open the tail on a tool_result;
+    the tail must take its tool_use along instead of orphaning it."""
+    cfg = Config(context_window=1_000, compact_threshold_ratio=0.5, compact_keep_recent=3)
+    ctx = ConversationContext(config=cfg)
+    client = StubSummarizer()
+    _populate_tool_rounds(ctx, 10)
+
+    assert await ctx.compact_if_needed(client) is True
+    assert _orphan_tool_results(ctx.messages) == []
+    tail = ctx.messages[2:]                      # after seed + summary
+    assert tail[0]["role"] == "assistant"        # opens on the tool_use
+    assert len(tail) == 4                        # widened from 3 to keep the pair
+
+
+@pytest.mark.asyncio
+async def test_compaction_fires_on_message_count_below_token_threshold():
+    """Many tiny tool rounds: far under the token threshold, but the message
+    count has reached the ceiling's ratio -- summarize before the hard
+    ceiling drops the middle without a summary."""
+    cfg = Config(context_window=1_000_000, compact_threshold_ratio=0.75,
+                 compact_keep_recent=4, max_context_messages=40)
+    ctx = ConversationContext(config=cfg)
+    client = StubSummarizer(summary="COUNT_TRIGGERED")
+    ctx.add_user_message("seed")
+    for i in range(15):                          # 31 messages: 1 + 15 * 2
+        ctx.add_assistant_message([{"type": "tool_use", "id": f"t{i}", "name": "ls", "input": {}}])
+        ctx.add_tool_results([{"type": "tool_result", "tool_use_id": f"t{i}", "content": "ok"}])
+
+    assert ctx.estimate_tokens(client) < 1_000_000 * 0.75
+    assert await ctx.compact_if_needed(client) is True
+    assert "COUNT_TRIGGERED" in ctx.messages[1]["content"]
+    assert _orphan_tool_results(ctx.messages) == []

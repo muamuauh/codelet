@@ -11,9 +11,16 @@ Compaction safety rules:
   - The last `compact_keep_recent` messages are always preserved verbatim,
     so any in-flight assistant tool_use / user tool_result pairing stays
     intact. (Anthropic API requires a tool_use to be followed by its
-    matching tool_result before the next assistant turn.)
+    matching tool_result before the next assistant turn.) If that slice
+    would open on a tool_result, it is widened by one to take its tool_use.
   - The middle slice is replaced with a single user message containing a
     summary block. If the slice is empty, nothing happens.
+  - Compaction also fires on message count (`compact_threshold_ratio *
+    max_context_messages`), so a long run of small tool calls is summarized
+    before the hard `max_context_messages` ceiling drops the middle unread.
+
+The hard ceiling obeys the same pairing rule: a kept tail never opens on a
+tool_result whose tool_use was cut off (the API rejects that with a 400).
 
 Stores Anthropic-shaped messages: list of dicts where content is either str or
 a list of content blocks (text / tool_use / tool_result).
@@ -69,10 +76,18 @@ class ConversationContext:
         Acts as a hard ceiling backstop in case compaction never runs (e.g.
         no LLMClient passed in for unit tests). Real production trims happen
         via `compact_if_needed`.
+
+        The cut skips forward past any tool_result turn at the start of the
+        kept tail: its tool_use is in the dropped part, and an orphaned
+        tool_result makes the next API call fail. So the result can be a
+        message or two under the ceiling, never over it.
         """
         max_msgs = self.config.max_context_messages
         if len(self.messages) > max_msgs:
-            self.messages = self.messages[:1] + self.messages[-(max_msgs - 1):]
+            start = len(self.messages) - (max_msgs - 1)
+            while start < len(self.messages) and _is_tool_result_turn(self.messages[start]):
+                start += 1
+            self.messages = self.messages[:1] + self.messages[start:]
 
     # ---------- compaction ----------
 
@@ -89,7 +104,13 @@ class ConversationContext:
         return max(1, len(rendered) // 4)
 
     def should_compact(self, client: "LLMClient | None" = None) -> bool:
-        threshold = int(self.config.context_window * self.config.compact_threshold_ratio)
+        ratio = self.config.compact_threshold_ratio
+        # Count first: it is free, and it catches the case the token check
+        # misses -- many small tool rounds that reach the message ceiling
+        # while still far below the token threshold.
+        if len(self.messages) >= int(self.config.max_context_messages * ratio):
+            return True
+        threshold = int(self.config.context_window * ratio)
         return self.estimate_tokens(client) > threshold
 
     async def compact_if_needed(self, client: "LLMClient") -> bool:
@@ -105,9 +126,13 @@ class ConversationContext:
             # Not enough middle to compact away meaningfully.
             return False
 
+        tail_start = len(self.messages) - keep_recent
+        if _is_tool_result_turn(self.messages[tail_start]):
+            tail_start -= 1                             # keep the tool_use with its result
+
         head = self.messages[:1]                        # seed user prompt
-        middle = self.messages[1:-keep_recent]          # to be summarized
-        tail = self.messages[-keep_recent:]             # preserved verbatim
+        middle = self.messages[1:tail_start]            # to be summarized
+        tail = self.messages[tail_start:]               # preserved verbatim
 
         if not middle:
             return False
@@ -125,6 +150,13 @@ class ConversationContext:
         self.messages = head + [summary_message] + tail
         self.compactions += 1
         return True
+
+
+def _is_tool_result_turn(msg: dict[str, Any]) -> bool:
+    """A user turn carrying tool_result blocks -- only valid right after its tool_use."""
+    content = msg.get("content")
+    return (msg.get("role") == "user" and isinstance(content, list)
+            and any(isinstance(b, dict) and b.get("type") == "tool_result" for b in content))
 
 
 def _render_message(msg: dict[str, Any]) -> str:
