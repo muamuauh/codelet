@@ -28,10 +28,13 @@ class PermissionGate:
 
         # Layer 2: mode-based filtering
         if mode == PermissionMode.PLAN:
-            write_tools = {"bash", "write_file", "edit_file"}
-            if tool.name in write_tools:
+            # Allowlist, not denylist: it used to block only bash / write_file /
+            # edit_file, so plugin tools that write (sandbox, create_tool,
+            # memory) went straight through a mode called read-only.
+            if not tool.is_read_only(params):
                 return ToolResult(
-                    output=f"Permission denied: '{tool.name}' is blocked in PLAN (read-only) mode.",
+                    output=f"Permission denied: '{tool.name}' can change files, which "
+                           "PLAN (read-only) mode does not allow.",
                     is_error=True,
                 )
 

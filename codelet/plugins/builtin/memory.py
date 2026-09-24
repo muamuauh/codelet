@@ -175,6 +175,9 @@ class MemoryTool(Tool):
     def __init__(self, store: MemoryStore) -> None:
         self._store = store
 
+    def is_read_only(self, params: dict[str, Any]) -> bool:
+        return params.get("action") == "view"
+
     @property
     def name(self) -> str:
         return "memory"

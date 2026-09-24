@@ -16,7 +16,7 @@ Session 持久化 / Slash 命令模板 / Diff 预览**。
 - [技术细节深入](docs/technical-details.md) — 12 个有坑的实现点
 - [面试式 Q&A](docs/interview-qa.md) — 30 个设计权衡问题
 - [实现路线图](docs/implementation-plan.md) — phase 划分
-- [插件架构](docs/plugin-architecture.md) — 插件接口 + 内置 sandbox / rag / **evolve 自进化** / **memory 跨会话记忆**（P8 / P9 / P11）
+- [插件架构](docs/plugin-architecture.md) — 插件接口 + 内置 sandbox / rag / **evolve 自进化** / **memory 跨会话记忆** / **router 意图路由**（P8 / P9 / P11 / P12）
 
 ## 当前进度
 
@@ -31,8 +31,9 @@ Session 持久化 / Slash 命令模板 / Diff 预览**。
 - [x] **P9** 自进化（self-evolution）：内置 **evolve** 插件提供 `create_tool` 元工具 —— 对话中模型发现缺工具时自己**编写**并经插件系统**热激活**到运行中的会话（下一轮即可调用），落盘 `.codelet/evolved/` 后续启动自动重载；ASK 模式先审阅生成源码、语法/运行错误隔离、核心工具受保护，见 [docs/plugin-architecture.md · 自进化](docs/plugin-architecture.md#自进化agent-自己长出工具)
 - [x] **P10** 分层上下文压缩（写入时截断 → 零 LLM 清理旧工具输出 → 七节结构化滚动摘要 → 保持配对的硬上限，token 预算以服务商 usage 为锚）+ 保留评测，见 [Context 压缩](#context-压缩p4)
 - [x] **P11** 跨会话记忆：内置 **memory** 插件（有类型的 markdown 条目、索引进系统提示词、按 key 覆盖、ASK 模式 diff 审批、拒存密钥）+ 两次会话评测：会话 2 照做用户纠正的比例从 3/20 到 19/20，见 [docs/plugin-architecture.md · 记忆](docs/plugin-architecture.md#记忆下一次会话该知道的少量事实)
+- [x] **P12** 意图路由：内置 **router** 插件把问答 / 规划 / 不明确的一轮设为只读（规则为主、模型兜底可选、分错只多一轮确认）；同时把 PLAN 模式从黑名单改成白名单——原来插件的写工具能穿过「只读」模式。测试集误拦 2/32、保护 41/48（加模型兜底 46/48）；端到端提问时擅自改文件 1/16 → 0/16，真要改的 8/8 不受影响。见 [docs/plugin-architecture.md · 意图路由](docs/plugin-architecture.md#意图路由只是在问的时候不改文件)
 
-测试：`239 passed`（`pytest -q`）。
+测试：`264 passed`（`pytest -q`）。
 
 ## 环境
 
@@ -344,7 +345,7 @@ eval / subagent / 一次性 prompt 场景默认关流式（拿完整结果更省
 ## 测试
 
 ```bash
-pytest -q          # 239 passed
+pytest -q          # 264 passed
 ```
 
 ## 目录结构（P1–P6）

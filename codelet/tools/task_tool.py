@@ -19,6 +19,13 @@ if TYPE_CHECKING:
 
 
 class TaskTool(Tool):
+    def is_read_only(self, params: dict[str, Any]) -> bool:
+        # A subagent inherits the parent's config, so under PLAN it is read-only
+        # too. A read-only *turn* is the parent loop's state and does not reach
+        # the child, so outside PLAN a subagent counts as writing.
+        from ..config import PermissionMode
+        return self._parent.config.permission_mode == PermissionMode.PLAN
+
     def __init__(self, parent: "AgentLoop") -> None:
         # Store the parent reference; we read its current depth + registry
         # at execute time so depth is always fresh.

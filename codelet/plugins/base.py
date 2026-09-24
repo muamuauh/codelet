@@ -8,6 +8,8 @@ calls methods on the `PluginContext` to contribute:
   - `on_user_prompt(fn)`           -- fn(text) -> text, transforms each prompt
   - `wrap_tool(fn)`                -- async middleware around tool execution:
         async def fn(name, tool_input, call_next) -> ToolResult
+  - `on_turn(fn)`                  -- fn(text) -> TurnPolicy | None (may be async),
+        consulted once per user turn; the first policy returned applies
   - `ctx.config`                   -- this plugin's dict from settings.json
   - `ctx.host`                     -- the live AgentLoop (or None), for plugins
         that hot-activate tools mid-session (see the `evolve` self-evolution
@@ -19,11 +21,23 @@ docs/plugin-architecture.md for worked sandbox / RAG examples.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Protocol, runtime_checkable
 
 from ..tools.base import Tool, ToolRegistry, ToolResult
 
+@dataclass
+class TurnPolicy:
+    """How one user turn should run. `read_only`: only tools whose
+    `is_read_only(params)` is true may run this turn. `note` is appended to the
+    user message so the model knows why."""
+    label: str
+    read_only: bool = False
+    note: str = ""
+
+
 PromptMiddleware = Callable[[str], str]
+TurnPolicyFn = Callable[[str], "TurnPolicy | None | Awaitable[TurnPolicy | None]"]
 ToolMiddleware = Callable[[str, dict, "Callable[[], Awaitable[ToolResult]]"], Awaitable[ToolResult]]
 
 
@@ -53,6 +67,7 @@ class PluginContext:
         self.prompt_middleware: list[PromptMiddleware] = []
         self.tool_middleware: list[ToolMiddleware] = []
         self.commands: dict[str, Callable[[str], str]] = {}
+        self.turn_policies: list[TurnPolicyFn] = []
 
     def register_tool(self, tool: Tool) -> None:
         """Add a tool. Registering a name that already exists overrides it, so a
@@ -69,6 +84,10 @@ class PluginContext:
 
     def wrap_tool(self, fn: ToolMiddleware) -> None:
         self.tool_middleware.append(fn)
+
+    def on_turn(self, fn: TurnPolicyFn) -> None:
+        """Decide how each user turn runs (e.g. the intent router's read-only turns)."""
+        self.turn_policies.append(fn)
 
     def register_command(self, name: str, fn: "Callable[[str], str]") -> None:
         """A slash command `/name args` -> a status string shown to the user

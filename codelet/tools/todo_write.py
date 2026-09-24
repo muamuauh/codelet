@@ -60,6 +60,8 @@ class TodoStore:
 
 
 class TodoWriteTool(Tool):
+    read_only = True   # the plan lives in memory, not in the workspace
+
     def __init__(self, store: TodoStore | None = None) -> None:
         self.store = store or TodoStore()
 

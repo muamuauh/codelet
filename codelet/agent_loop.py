@@ -39,6 +39,7 @@ from .hooks.runner import HookRunner
 from .llm.base import LLMClient, LLMResponse, ToolCall
 from .llm.factory import build_client
 from .permissions import PermissionGate
+from .plugins.base import TurnPolicy
 from .plugins.loader import apply_plugins
 from .skills.loader import SkillIndex, load_skills
 from .system_prompt import build_system_prompt
@@ -202,6 +203,8 @@ class AgentLoop:
         self._prompt_middleware: list[Callable[[str], str]] = []
         self._tool_middleware: list[Callable[..., Any]] = []
         self._plugin_commands: dict[str, Callable[[str], str]] = {}
+        self._turn_policies: list[Callable[..., Any]] = []
+        self._turn: TurnPolicy | None = None     # policy of the turn in progress
         # Runtime tool/skill toggles (GUI hot-plug). Disabled tools are hidden
         # from the model and refused if called; disabled skills drop out of the
         # system-prompt index.
@@ -247,6 +250,15 @@ class AgentLoop:
                 user_message = str(mw(user_message))
             except Exception as exc:
                 self._sink.notice(f"plugin prompt hook failed: {exc}", level="dim")
+
+        # Turn policy (e.g. the intent router): decided once, before the model
+        # sees the message, and enforced in _dispatch_one for the whole turn.
+        self._turn = await self._decide_turn(user_message)
+        if self._turn is not None:
+            self._sink.notice(f"turn: {self._turn.label}"
+                              + (" (read-only)" if self._turn.read_only else ""), level="dim")
+            if self._turn.note:
+                user_message = f"{user_message}\n\n<turn_note>{self._turn.note}</turn_note>"
 
         if images:
             content: list[dict[str, Any]] = []
@@ -330,6 +342,22 @@ class AgentLoop:
         self._prompt_middleware = applied.prompt_middleware
         self._tool_middleware = applied.tool_middleware
         self._plugin_commands = applied.commands
+        self._turn_policies = applied.turn_policies
+
+    async def _decide_turn(self, text: str) -> TurnPolicy | None:
+        """First policy a plugin returns wins. A failing policy is skipped: the
+        turn then runs as it would without one."""
+        for fn in self._turn_policies:
+            try:
+                decision = fn(text)
+                if inspect.isawaitable(decision):
+                    decision = await decision
+            except Exception as exc:
+                self._sink.notice(f"turn policy skipped: {exc}", level="dim")
+                continue
+            if decision is not None:
+                return decision
+        return None
 
     def run_command(self, name: str, args: str = "") -> str | None:
         """Run a plugin-registered slash command; returns its status string, or
@@ -365,6 +393,7 @@ class AgentLoop:
         self._prompt_middleware.extend(ctx.prompt_middleware)
         self._tool_middleware.extend(ctx.tool_middleware)
         self._plugin_commands.update(ctx.commands)
+        self._turn_policies.extend(ctx.turn_policies)
         self.rebuild_system_prompt()
         return [n for n in self.registry.names() if n not in before]
 
@@ -595,6 +624,13 @@ class AgentLoop:
         if denial is not None:
             self._sink.notice(denial.output, level="error")
             return self._error_result(call.id, denial.output)
+
+        if self._turn is not None and self._turn.read_only and not tool.is_read_only(tool_input):
+            msg = (f"Blocked: this turn was routed as '{self._turn.label}', so tools that change "
+                   "files are off. Tell the user what you would change and ask them to confirm; "
+                   "their reply turns changes back on.")
+            self._sink.notice(msg, level="warn")
+            return self._error_result(call.id, msg)
 
         # Diff preview + confirmation for destructive writes in ASK mode. The
         # callback is None for subagents and for tests that explicitly opt out.

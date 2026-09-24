@@ -17,15 +17,16 @@ CLI 与 Web GUI 都已接好），以及 `ctx.host`（指向运行中的 `AgentL
 
 ### 内置插件（随 codelet 发布，但只在显式启用时加载）
 
-`codelet/plugins/builtin/` 下有四个参考实现。它们**绝不会被自动发现** —— 必须在
+`codelet/plugins/builtin/` 下有五个参考实现。它们**绝不会被自动发现** —— 必须在
 settings.json 里点名启用：
 
 ```json
-{"plugins": {"enabled": ["sandbox", "rag", "evolve", "memory"],
+{"plugins": {"enabled": ["sandbox", "rag", "evolve", "memory", "router"],
              "config": {"sandbox": {"image": "python:3.12-slim", "network": false},
                         "rag": {"inject": false, "top_k": 3},
                         "evolve": {"dir": ".codelet/evolved"},
-                        "memory": {"dir": ".codelet/memory", "user_dir": "~/.codelet/memory"}}}}
+                        "memory": {"dir": ".codelet/memory", "user_dir": "~/.codelet/memory"},
+                        "router": {"llm": false}}}}
 ```
 
 - **sandbox** —— 新增一个**独立的** `sandbox` 工具，每条命令都在一次性 Docker 容器里执行，
@@ -39,6 +40,7 @@ settings.json 里点名启用：
   进当前会话。见下方[自进化](#自进化agent-自己长出工具)。
 - **memory** —— 跨会话记忆：提供 `memory` 工具（view / write / delete）和 `/memory` 命令，把记忆的
   索引放进系统提示词。见下方[记忆](#记忆下一次会话该知道的少量事实)。
+- **router** —— 意图路由：把「只是在问」的一轮设成只读。见下方[意图路由](#意图路由只是在问的时候不改文件)。
 
 ## 自进化：Agent 自己长出工具
 
@@ -124,6 +126,52 @@ claude-haiku-4-5，每个场景重复 2 次：
 局限：场景少、合成的、只用了一个模型；「不开记忆」时会话 1 的文件本身也能带出约定，这正是要分两种
 工作区跑的原因。
 
+## 意图路由：只是在问的时候不改文件
+
+每轮用户输入先分成五类：问答 / 规划 / 不明确 / 修改 / 执行命令。前三类这一轮**只读**：
+没声明自己只读的工具一律拒绝，拒绝信息让模型「说明要改什么、请用户确认」；用户回一句
+「好的 / 改吧 / go ahead」，下一轮就恢复。修改和执行命令两类，和没有路由时完全一样。
+
+**只在有把握时才收紧。** 规则判不了的一轮保持原样，所以分错最多多一轮确认，永远不会比
+没有路由更弱。默认只用规则（免费、即时、可测）；`"llm": true` 时，规则判不了的那几轮再问
+一次 `compact_model`。
+
+**先修了一个漏洞。** 要做「只读」，先得让只读真的只读：原来 PLAN 模式拦截的是一张写死的
+名单（`bash` / `write_file` / `edit_file`），于是插件带来的会写的工具——`sandbox`（工作区
+以可写方式挂进容器）、`create_tool`、`memory`——在一个叫「只读」的模式里畅通无阻。现在改成
+**白名单**：工具自己声明 `read_only`（或按调用判断的 `is_read_only(params)`：`bash` 只放行
+单条、不带重定向和串联的只读命令，`memory` 只放行 view），没声明的一律当作会写。这条对 PLAN
+模式和路由的只读轮同时生效；副作用是 PLAN 模式现在能跑 `ls`、`git status` 这类命令了。
+
+**评测**（[evals/intent/](../evals/intent/)）：
+
+分类：160 条请求（自己写、自己标注——本地会话里没有真实数据），五类各 32 条，每类一半做
+开发集（用来改规则）、一半做测试集（只用来报数）。最看重两个数：「误拦」——该改的被设成只读；
+「保护」——该只读的真的只读了。
+
+| | 误拦 | 保护 | 规则判不了 |
+|---|---|---|---|
+| 规则，开发集（按它改过规则） | 1/32 | 46/48 | 3/80 |
+| **规则，测试集** | **2/32** | **41/48** | 7/80 |
+| 规则 + 模型兜底，测试集 | 2/32 | 46/48 | 0/80（调了 7 次模型） |
+
+照开发集改规则时，开发集的保护率从 27/48 升到 43/48，测试集只从 28/48 升到 32/48，误拦还多
+了一条——这是只用测试集报数的原因。测试集上的两条误拦：「Could you make load_settings return a
+dataclass?」被当成问答，「看看 CI 为什么失败」被当成不明确。
+
+端到端（[unasked_edits.py](../evals/intent/unasked_edits.py)）：一个带 bug 的小仓库，8 个提问 /
+规划类请求（好几个在诱导「顺手修了」）和 4 个真要改的请求，claude-haiku-4-5，各跑 2 次：
+
+| | 只是提问时文件被改了 | 真要改时改成了 |
+|---|---|---|
+| 不开路由 | 1/16 | 8/8 |
+| 开路由 | 0/16 | 8/8 |
+
+**结论和取舍：** 收益是真的但不大——这个模型在这组题上很少擅自改文件（16 次里 1 次）；路由的
+价值在于**保证**：一轮被判成提问，机制上就改不了，而且不妨碍真要改的请求。按「收益不明显就不
+默认开启」的原则，路由保持默认关闭。「Why would divide(1, 0) crash?」这种带排障词的提问会被当成
+执行命令放行，这是规则的已知局限。
+
 ## 最小可用插件
 
 丢一个文件到 `.codelet/plugins/audit.py` 即可：
@@ -160,6 +208,7 @@ PLUGIN = AuditPlugin()   # 加载器找的就是模块级的 PLUGIN
 | 斜杠命令 | `ctx.register_command(name, fn)` | `/rag`、`/evolve` | 已实现 |
 | 插件配置 | `ctx.config` | 来自 `settings.json` 的该插件配置 | 已实现 |
 | 运行中的 loop | `ctx.host` | 会话中途热加载（自进化用它） | 已实现 |
+| 每轮策略 | `ctx.on_turn(fn)` | 意图路由：决定这一轮是否只读 | 已实现 |
 | LLM provider | `ctx.register_provider(name, factory)` | 接新的模型后端 | **未实现** |
 
 ```python
@@ -206,6 +255,10 @@ class Plugin(Protocol):
 - 子 agent 通过 `inherit_plugins_from(parent)` 按引用继承父级已应用的插件（和 skills / hooks 一样）。
 - `Tool.confirm_in_ask`：工具声明为 True 时，ASK 模式下只要它的 `preview_diff` 返回了 diff，就要等
   用户批准——插件工具不必让核心知道自己的名字就能接入审批（`memory` 用的就是它）。
+- `Tool.read_only` / `Tool.is_read_only(params)`：工具声明自己是否只读。PLAN 模式和路由的只读轮
+  只放行声明了只读的工具——白名单，不是黑名单。
+- `AgentLoop._decide_turn`：每轮用户输入进来时问一遍插件的 `on_turn` 策略（第一个给出结论的生效，
+  出错的跳过），结果在 `_dispatch_one` 里对整轮生效。
 
 ## 两个内置插件是怎么落地的
 

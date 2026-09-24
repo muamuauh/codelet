@@ -50,6 +50,8 @@ class _TextExtractor(HTMLParser):
 
 
 class WebFetchTool(Tool):
+    read_only = True
+
     @property
     def name(self) -> str:
         return "web_fetch"

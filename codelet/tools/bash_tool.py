@@ -5,13 +5,43 @@ commands work via `powershell -Command "..."` if needed.
 """
 from __future__ import annotations
 
+import re
+import shlex
 import subprocess
 from typing import Any
 
 from .base import Tool, ToolResult
 
 
+# Commands that only read. One command per call: any shell operator (pipe,
+# redirect, chaining, substitution) makes the call count as writing, because
+# `cat a > b` or `ls; rm x` would otherwise slip through.
+READ_ONLY_COMMANDS = {"ls", "dir", "cat", "head", "tail", "wc", "find", "grep", "rg",
+                      "tree", "pwd", "which", "where", "echo", "date", "stat", "file", "du"}
+READ_ONLY_GIT = {"status", "diff", "log", "show", "blame", "branch", "remote", "rev-parse"}
+_SHELL_OPERATORS = re.compile(r"[;&|<>`]|\$\(")
+
+
+def is_read_only_command(command: str) -> bool:
+    if not command.strip() or _SHELL_OPERATORS.search(command):
+        return False
+    try:
+        argv = shlex.split(command, posix=True)
+    except ValueError:
+        return False
+    head = argv[0].lower()
+    if head == "git":
+        sub = [a for a in argv[1:] if not a.startswith("-")]
+        return bool(sub) and sub[0] in READ_ONLY_GIT and "-D" not in argv and "-d" not in argv
+    if head == "find":
+        return not any(a in ("-delete", "-exec", "-execdir", "-ok", "-fprint") for a in argv)
+    return head in READ_ONLY_COMMANDS
+
+
 class BashTool(Tool):
+    def is_read_only(self, params: dict[str, Any]) -> bool:
+        return is_read_only_command(str(params.get("command", "")))
+
     DANGEROUS_PATTERNS = [
         "rm -rf /", "rm -rf ~", "sudo rm",
         "git push --force", "git reset --hard",

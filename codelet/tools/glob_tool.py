@@ -9,6 +9,8 @@ MAX_RESULTS = 500
 
 
 class GlobTool(Tool):
+    read_only = True
+
     @property
     def name(self) -> str:
         return "glob"

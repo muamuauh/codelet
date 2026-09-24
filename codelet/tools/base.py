@@ -27,6 +27,10 @@ class Tool(ABC):
     # user's approval, like write_file. Lets a plugin tool opt in without the loop
     # having to know its name.
     confirm_in_ask: bool = False
+    # True: the tool never changes anything outside the conversation. PLAN mode
+    # and read-only turns allow only these; an undeclared tool counts as writing,
+    # so a plugin or self-evolved tool is blocked until it says otherwise.
+    read_only: bool = False
 
     @property
     @abstractmethod
@@ -43,6 +47,10 @@ class Tool(ABC):
     def check_permissions(self, params: dict[str, Any]) -> str | None:
         """Layer-1 self-check. Return None if allowed, else a denial reason."""
         return None
+
+    def is_read_only(self, params: dict[str, Any]) -> bool:
+        """Per call, for tools whose effect depends on the input (bash, memory)."""
+        return self.read_only
 
     def preview_diff(self, params: dict[str, Any]) -> str | None:
         """Optional: return a unified-diff preview of what `execute` would change.

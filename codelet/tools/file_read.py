@@ -9,6 +9,8 @@ MAX_FILE_SIZE = 2 * 1024 * 1024  # 2 MB
 
 
 class FileReadTool(Tool):
+    read_only = True
+
     @property
     def name(self) -> str:
         return "read_file"

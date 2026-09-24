@@ -124,6 +124,8 @@ class RagIndex:
 
 
 class SearchDocsTool(Tool):
+    read_only = True
+
     def __init__(self, plugin: "RagPlugin") -> None:
         self._plugin = plugin
 

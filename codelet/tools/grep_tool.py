@@ -12,6 +12,8 @@ MAX_MATCHES = 200
 
 
 class GrepTool(Tool):
+    read_only = True
+
     @property
     def name(self) -> str:
         return "grep"

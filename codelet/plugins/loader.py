@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ..tools.base import ToolRegistry
-from .base import Plugin, PluginContext, PromptMiddleware, ToolMiddleware
+from .base import Plugin, PluginContext, PromptMiddleware, ToolMiddleware, TurnPolicyFn
 
 # Built-in plugins ship with codelet but load ONLY when named in
 # settings.json plugins.enabled (never auto-discovered -- a sandbox silently
@@ -31,6 +31,7 @@ _BUILTIN = {
     "rag": "codelet.plugins.builtin.rag",
     "evolve": "codelet.plugins.builtin.evolve",
     "memory": "codelet.plugins.builtin.memory",
+    "router": "codelet.plugins.builtin.router",
 }
 
 
@@ -41,6 +42,7 @@ class AppliedPlugins:
     prompt_middleware: list[PromptMiddleware] = field(default_factory=list)
     tool_middleware: list[ToolMiddleware] = field(default_factory=list)
     commands: dict[str, Callable[[str], str]] = field(default_factory=dict)
+    turn_policies: list[TurnPolicyFn] = field(default_factory=list)
 
 
 def _warn(msg: str) -> None:
@@ -157,6 +159,7 @@ def apply_plugins(
         applied.prompt_middleware.extend(ctx.prompt_middleware)
         applied.tool_middleware.extend(ctx.tool_middleware)
         applied.commands.update(ctx.commands)
+        applied.turn_policies.extend(ctx.turn_policies)
     return applied
 
 

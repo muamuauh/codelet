@@ -15,6 +15,8 @@ from .base import Tool, ToolResult
 
 
 class SkillTool(Tool):
+    read_only = True
+
     def __init__(self, index: SkillIndex) -> None:
         self._index = index
 

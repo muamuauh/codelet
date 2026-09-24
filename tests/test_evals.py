@@ -243,3 +243,58 @@ def test_memory_eval_run_scenario_offline():
 
     rows = run_scenario(naming, Config(), memory=False, client=Scripted(script))
     assert rows[0]["memories_saved"] == []        # no plugin: the memory call is an unknown tool
+
+
+# ---------- intent evals: the dataset, the metrics and the harness, offline ----------
+
+def test_intent_dataset_is_balanced_and_split_cleanly():
+    from evals.intent.dataset import LABELLED, split
+
+    dev, test = split("dev"), split("test")
+    assert len(LABELLED) == 160 and len(dev) == len(test) == 80
+    assert not set(dev) & set(test)
+    assert len({t for t, _ in LABELLED}) == 160            # no duplicate prompts
+
+
+def test_intent_metrics_count_false_restriction_and_protection():
+    from evals.intent.classify import evaluate
+
+    items = [("calc.py 里的 divide 是做什么的？", "question"),   # restricted: protected
+             ("把 timeout 改成 30 秒", "edit"),                  # runs: fine
+             ("Could you make load_settings return a dataclass?", "edit")]  # known false restriction
+    r = evaluate(items)
+    assert (r["protected"], r["n_should_restrict"]) == (1, 1)
+    assert (r["false_restriction"], r["n_should_run"]) == (1, 2)
+
+
+def test_unasked_edits_harness_offline():
+    """Router on: a scripted write on a question turn is blocked; an edit turn goes
+    through. Router off: the same scripted write lands."""
+    from codelet.config import Config
+    from codelet.llm.base import LLMClient, LLMResponse, ToolCall
+    from evals.intent.unasked_edits import DOING, run_one
+
+    def write(path: str, content: str) -> LLMResponse:
+        call = ToolCall(id=f"toolu_{path}", name="write_file", input={"path": path, "content": content})
+        return LLMResponse(tool_calls=[call], stop_reason="tool_use", raw_content=[
+            {"type": "tool_use", "id": call.id, "name": call.name, "input": call.input}])
+
+    class Scripted(LLMClient):
+        def __init__(self, script):
+            self.script = list(script)
+
+        def chat(self, **kwargs):
+            return self.script.pop(0) if self.script else LLMResponse(
+                text_blocks=["ok"], raw_content=[{"type": "text", "text": "ok"}], stop_reason="end_turn")
+
+    fix = "def add(a, b):\n    return a + b\n\n\ndef divide(a, b):\n    if b == 0:\n        raise ValueError\n    return a / b\n"
+    asked = run_one("calc.py 里的 divide 遇到 0 会怎么样？", Config(), True, None,
+                    Scripted([write("calc.py", fix)]))
+    assert asked["label"] == "question" and asked["changed"] == [] and not asked["error"]
+
+    unrouted = run_one("calc.py 里的 divide 遇到 0 会怎么样？", Config(), False, None,
+                       Scripted([write("calc.py", fix)]))
+    assert unrouted["changed"] == ["calc.py"]
+
+    doing = run_one(DOING[0].prompt, Config(), True, DOING[0].check, Scripted([write("calc.py", fix)]))
+    assert doing["label"] == "edit" and doing["done"] is True
