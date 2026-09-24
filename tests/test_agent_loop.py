@@ -183,3 +183,51 @@ def test_subagent_never_streams():
     agent, _ = _terminal_agent(client, stream=True, is_subagent=True)
     agent.run("hi")
     assert client.on_text_called is False
+
+
+class FloodTool(Tool):
+    """Returns far more text than the L0 cap allows."""
+
+    @property
+    def name(self) -> str:
+        return "flood"
+
+    @property
+    def description(self) -> str:
+        return "Print a lot."
+
+    @property
+    def input_schema(self) -> dict[str, Any]:
+        return {"type": "object", "properties": {}}
+
+    def execute(self, params: dict[str, Any]) -> ToolResult:
+        return ToolResult(output="HEAD" + "m" * 50_000 + "TAIL")
+
+
+def test_oversized_tool_output_is_capped_and_spilled():
+    client = ScriptedClient([
+        _tool_response([ToolCall(id="toolu_flood1", name="flood", input={})]),
+        _text_response("done"),
+    ])
+    cfg = Config(permission_mode=PermissionMode.AUTO, max_output_chars=1_000)
+    reg = ToolRegistry()
+    reg.register(FloodTool())
+    agent = AgentLoop(config=cfg, registry=reg, client=client)
+    agent.run("go")
+
+    sent = client.calls[1]["messages"][-1]["content"][0]["content"]
+    assert sent.startswith("HEAD") and sent.endswith("TAIL")       # head and tail kept
+    assert len(sent) < 1_200
+    from codelet.context import SPILL_DIR
+    spill = SPILL_DIR / "toolu_flood1.txt"
+    assert str(spill) in sent
+    assert spill.read_text(encoding="utf-8") == "HEAD" + "m" * 50_000 + "TAIL"
+
+
+def test_reported_usage_anchors_the_context_estimate():
+    reply = _text_response("hi")
+    reply.usage = {"input_tokens": 12_345, "output_tokens": 3}
+    agent = _make_agent(ScriptedClient([reply]))
+    agent.run("hello")
+    # Anchored before "hi" was appended; the estimate is anchor + that reply.
+    assert 12_345 < agent.context.estimate_tokens() < 12_360

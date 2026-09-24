@@ -113,7 +113,7 @@ flowchart TB
 | **LLM 抽象** | [llm/base.py](../codelet/llm/base.py) · [llm/anthropic_client.py](../codelet/llm/anthropic_client.py) · [llm/openai_compat.py](../codelet/llm/openai_compat.py) | `LLMClient` ABC + 两个具体实现，OpenAI 客户端做 Anthropic ↔ OpenAI 双向翻译 |
 | **工具** | [tools/](../codelet/tools/) | Tool ABC + Registry + 7 个核心工具 + 3 个动态工具 (task/skill/todo_write) |
 | **权限** | [permissions.py](../codelet/permissions.py) | 2 层权限门：tool 自检 + ASK/AUTO/PLAN 模式 |
-| **上下文** | [context.py](../codelet/context.py) | 消息缓冲 + token 估算 + 压缩（Haiku 总结中段） |
+| **上下文** | [context.py](../codelet/context.py) | 消息缓冲 + 以真实 usage 为锚的 token 估算 + 分层压缩（清理旧工具输出 → 结构化滚动摘要 → 保持配对的硬上限） |
 | **system prompt** | [system_prompt.py](../codelet/system_prompt.py) | 模板组合：基底 + 工具列表 + 权限说明 + skill 索引 + CLAUDE.md |
 | **Skills** | [skills/loader.py](../codelet/skills/loader.py) · [tools/skill_tool.py](../codelet/tools/skill_tool.py) | YAML frontmatter md 解析 + 项目/用户合并 + 按需取 body |
 | **SubAgent** | [subagent/runner.py](../codelet/subagent/runner.py) · [tools/task_tool.py](../codelet/tools/task_tool.py) | 隔离 context 的子 loop + 深度上限 + 共享 hooks/telemetry |

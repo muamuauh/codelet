@@ -33,7 +33,7 @@ from rich.console import Console
 from rich.syntax import Syntax
 
 from .config import Config, PermissionMode
-from .context import ConversationContext
+from .context import ConversationContext, spill
 from .events import AgentSink, NullSink, Status
 from .hooks.runner import HookRunner
 from .llm.base import LLMClient, LLMResponse, ToolCall
@@ -278,7 +278,12 @@ class AgentLoop:
             # a full tool round-trip is appended, so we don't accidentally
             # decapitate an in-flight tool_use/tool_result pair.
             try:
-                await self.context.compact_if_needed(self.client)
+                ctx = self.context
+                before = (ctx.cleared_results, ctx.compactions)
+                if await ctx.compact_if_needed(self.client, pinned=self._pinned_state()):
+                    self._sink.notice(
+                        f"context compacted: {ctx.cleared_results - before[0]} old tool outputs "
+                        f"cleared, {ctx.compactions - before[1]} summary", level="dim")
             except Exception as exc:
                 # A failing summarizer must NOT kill the agent. Log and move on.
                 self._sink.notice(f"compaction skipped: {exc}", level="dim")
@@ -488,6 +493,26 @@ class AgentLoop:
     def _record_usage(self, response: LLMResponse) -> None:
         if response.usage:
             self.telemetry.record_chat(self.config.model, response.usage)
+            # Runs before the reply is appended: the count covers what was sent.
+            self.context.note_usage(response.usage)
+
+    def _pinned_state(self) -> str:
+        """State re-attached verbatim after an L2 summary: the plan must not be
+        paraphrased away along with the conversation that produced it."""
+        return self.todo_store.render() if self.todo_store.todos else ""
+
+    def _cap_output(self, tool_use_id: str, output: str) -> str:
+        """L0: cap one tool output at `max_output_chars`, keeping head and tail
+        (errors tend to be at the end). The full text goes to a temp file the
+        model can page through with read_file(offset, limit)."""
+        cap = self.config.max_output_chars
+        if len(output) <= cap:
+            return output
+        path = spill(tool_use_id, output)
+        where = f"full output saved to {path}" if path else "full output could not be saved"
+        half = cap // 2
+        return (f"{output[:half]}\n\n[... {len(output) - 2 * half} chars omitted; "
+                f"{where} ...]\n\n{output[-half:]}")
 
     async def _spin_until_first_token(self, queue: "asyncio.Queue[str | None]") -> str | None:
         """Show a "thinking" status with a rotating word until the first queue item
@@ -608,7 +633,7 @@ class AgentLoop:
         return {
             "type": "tool_result",
             "tool_use_id": call.id,
-            "content": result.output,
+            "content": self._cap_output(call.id, result.output),  # hooks saw it uncapped
             "is_error": result.is_error,
         }
 

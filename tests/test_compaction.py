@@ -16,8 +16,6 @@ class StubSummarizer(LLMClient):
     def __init__(self, summary: str = "concise summary of past chunk") -> None:
         self.summary = summary
         self.calls: list[dict[str, Any]] = []
-        # Make count_tokens controllable: set self._count_factor before calls.
-        self._count_factor = 1
 
     def chat(self, **kwargs: Any) -> LLMResponse:
         self.calls.append(kwargs)
@@ -26,10 +24,6 @@ class StubSummarizer(LLMClient):
             raw_content=[{"type": "text", "text": self.summary}],
             stop_reason="end_turn",
         )
-
-    def count_tokens(self, text: str) -> int:
-        # 1 char ~ 1 token for predictable thresholding in tests.
-        return max(1, len(text)) * self._count_factor
 
 
 def _populate(ctx: ConversationContext, n: int) -> None:
@@ -101,7 +95,8 @@ async def test_compaction_uses_compact_model_not_main_model():
 async def test_compaction_makes_monotonic_progress():
     """Repeated compaction must never grow the context size -- it either
     shrinks it further (when still over threshold) or no-ops."""
-    cfg = Config(context_window=1_000, compact_threshold_ratio=0.5, compact_keep_recent=2)
+    # ~450 estimated tokens: over the 300 threshold before, well under after.
+    cfg = Config(context_window=600, compact_threshold_ratio=0.5, compact_keep_recent=2)
     ctx = ConversationContext(config=cfg)
     client = StubSummarizer()
     _populate(ctx, 8)
@@ -164,7 +159,126 @@ async def test_compaction_fires_on_message_count_below_token_threshold():
         ctx.add_assistant_message([{"type": "tool_use", "id": f"t{i}", "name": "ls", "input": {}}])
         ctx.add_tool_results([{"type": "tool_result", "tool_use_id": f"t{i}", "content": "ok"}])
 
-    assert ctx.estimate_tokens(client) < 1_000_000 * 0.75
+    assert ctx.estimate_tokens() < 1_000_000 * 0.75
     assert await ctx.compact_if_needed(client) is True
     assert "COUNT_TRIGGERED" in ctx.messages[1]["content"]
     assert _orphan_tool_results(ctx.messages) == []
+
+
+# ---------- layered compaction (L1 clear / L2 structured rolling summary) ----------
+
+def _big_tool_rounds(ctx: ConversationContext, n: int, size: int, name: str = "grep") -> None:
+    ctx.add_user_message("seed task")
+    for i in range(n):
+        ctx.add_assistant_message([{"type": "tool_use", "id": f"t{i}", "name": name, "input": {}}])
+        ctx.add_tool_results([{"type": "tool_result", "tool_use_id": f"t{i}",
+                               "content": f"out{i} " + "z" * size}])
+
+
+def _results(ctx: ConversationContext) -> list[str]:
+    return [m["content"][0]["content"] for m in ctx.messages
+            if isinstance(m["content"], list) and m["content"][0].get("type") == "tool_result"]
+
+
+@pytest.mark.asyncio
+async def test_l1_clears_old_tool_outputs_without_an_llm_call():
+    # 6 outputs of ~2k tokens: over the L1 line (10k), under the L2 line (15k).
+    cfg = Config(context_window=20_000, compact_clear_ratio=0.5,
+                 compact_threshold_ratio=0.75, compact_keep_recent=4)
+    ctx = ConversationContext(config=cfg)
+    client = StubSummarizer()
+    _big_tool_rounds(ctx, 6, 8_000)
+
+    assert await ctx.compact_if_needed(client) is True
+    assert client.calls == []                    # L1 alone was enough
+    assert ctx.cleared_results == 4 and ctx.compactions == 0
+    results = _results(ctx)
+    assert all(r.startswith("[cleared to save context: grep output, ") for r in results[:4])
+    assert results[4].startswith("out4 ") and results[5].startswith("out5 ")  # tail intact
+    assert _orphan_tool_results(ctx.messages) == []
+
+
+@pytest.mark.asyncio
+async def test_l1_placeholder_keeps_the_spill_path():
+    cfg = Config(context_window=4_000, compact_clear_ratio=0.25, compact_keep_recent=2)
+    ctx = ConversationContext(config=cfg)
+    ctx.add_user_message("seed")
+    spilled = ("head\n\n[... 99 chars omitted; full output saved to C:\\tmp\\t0.txt ...]\n\n"
+               + "q" * 5_000)     # ~1.25k tokens: past the 1k L1 line
+    ctx.add_assistant_message([{"type": "tool_use", "id": "s0", "name": "bash", "input": {}}])
+    ctx.add_tool_results([{"type": "tool_result", "tool_use_id": "s0", "content": spilled}])
+    for i in range(2):
+        ctx.add_assistant_message([{"type": "tool_use", "id": f"t{i}", "name": "ls", "input": {}}])
+        ctx.add_tool_results([{"type": "tool_result", "tool_use_id": f"t{i}", "content": "ok"}])
+
+    await ctx.compact_if_needed(StubSummarizer())
+    cleared = _results(ctx)[0]
+    assert cleared.startswith("[cleared to save context: bash output")
+    assert "C:\\tmp\\t0.txt" in cleared
+
+
+@pytest.mark.asyncio
+async def test_l2_prompt_is_structured():
+    cfg = Config(context_window=1_000, compact_threshold_ratio=0.5, compact_keep_recent=2)
+    ctx = ConversationContext(config=cfg)
+    client = StubSummarizer()
+    _populate(ctx, 10)
+    await ctx.compact_if_needed(client)
+    call = client.calls[0]
+    from codelet.context import SUMMARY_SECTIONS
+    for section in SUMMARY_SECTIONS:
+        assert f"## {section}" in call["system"]   # rules in system: kept out of the summary
+    assert "## Goal" not in call["messages"][0]["content"]
+    assert "<previous_summary>" not in call["messages"][0]["content"]  # nothing to merge yet
+
+
+@pytest.mark.asyncio
+async def test_l2_is_rolling_and_pinned_state_is_reattached_not_resummarized():
+    cfg = Config(context_window=1_000, compact_threshold_ratio=0.5, compact_keep_recent=2)
+    ctx = ConversationContext(config=cfg)
+    client = StubSummarizer(summary="FIRST-SUMMARY")
+    _populate(ctx, 10)
+    await ctx.compact_if_needed(client, pinned="TODO: step 3")
+    assert "<current_state>\nTODO: step 3\n</current_state>" in ctx.messages[1]["content"]
+
+    client.summary = "SECOND-SUMMARY"
+    for i in range(10):
+        ctx.add_user_message(f"later{i} " + "x" * 200)
+        ctx.add_assistant_message([{"type": "text", "text": f"b{i}"}])
+    await ctx.compact_if_needed(client, pinned="TODO: step 4")
+
+    second_prompt = client.calls[1]["messages"][0]["content"]
+    assert "<previous_summary>\nFIRST-SUMMARY\n</previous_summary>" in second_prompt
+    assert "TODO: step 3" not in second_prompt       # stale pinned state is not merged
+    summaries = [m for m in ctx.messages if isinstance(m["content"], str)
+                 and m["content"].startswith("<conversation_summary>")]
+    assert len(summaries) == 1                       # replaced, not stacked
+    assert "SECOND-SUMMARY" in summaries[0]["content"]
+    assert "TODO: step 4" in summaries[0]["content"]
+
+
+# ---------- token budget ----------
+
+def test_estimate_is_anchored_on_reported_usage():
+    ctx = ConversationContext(config=Config())
+    ctx.add_user_message("seed")
+    ctx.note_usage({"input_tokens": 50_000})          # provider's count for what was sent
+    assert ctx.estimate_tokens() == 50_000
+    ctx.add_assistant_message([{"type": "text", "text": "a" * 400}])
+    assert 50_090 < ctx.estimate_tokens() < 50_120    # anchor + heuristic for the delta
+
+
+@pytest.mark.asyncio
+async def test_anchor_is_dropped_when_compaction_rewrites_messages():
+    cfg = Config(context_window=1_000, compact_threshold_ratio=0.5, compact_keep_recent=2)
+    ctx = ConversationContext(config=cfg)
+    _populate(ctx, 10)
+    ctx.note_usage({"input_tokens": 900})
+    assert await ctx.compact_if_needed(StubSummarizer()) is True
+    assert ctx.estimate_tokens() < 900                # heuristic over the smaller list
+
+
+def test_cjk_is_not_undercounted():
+    from codelet.context import approx_tokens
+    assert approx_tokens("x" * 800) == 200
+    assert approx_tokens("上下文压缩" * 40) == 200    # ~1 token per CJK char, not len // 4

@@ -194,39 +194,40 @@ System prompt 中只放 `name: description` 单行，**完整 body 在 `skill` �
 
 ## 6. Context 压缩的安全切片
 
-**问题**：Anthropic API 要求每个 `tool_use` block 后必须紧跟其 `tool_result`。**如果压缩切片切到这种配对的中间，下一次 API 调用直接 400**。
+**问题**：Anthropic API 要求每个 `tool_use` block 后必须紧跟其 `tool_result`。**任何一处切片只要切到这种配对的中间，下一次 API 调用直接 400**。
 
-**实现** ([context.py](../codelet/context.py))：
+压缩现在分四层（L0 截断单个大输出 / L1 清理旧工具输出 / L2 结构化摘要 / L3 硬上限，见 [README · Context 压缩](../README.md#context-压缩p4)），会**改动消息列表**的是 L2 和 L3，两处都要守住配对；L1 只替换 tool_result 的内容，不动消息结构。
+
+**L2：保留尾部时不从 tool_result 开头** ([context.py](../codelet/context.py))：
 
 ```python
-async def compact_if_needed(self, client: LLMClient) -> bool:
-    if not self.should_compact(client):
-        return False
+def _tail_start(self) -> int:
+    """Index where the always-kept tail begins, never on a tool_result."""
+    start = max(1, len(self.messages) - max(2, self.config.compact_keep_recent))
+    if start > 1 and _is_tool_result_turn(self.messages[start]):
+        start -= 1                                  # keep the tool_use with its result
+    return start
 
-    keep_recent = max(2, self.config.compact_keep_recent)
-    if len(self.messages) <= keep_recent + 1:
-        return False  # 没有足够的"中段"可压
-
-    head = self.messages[:1]                      # 第一条（种子任务）保留
-    middle = self.messages[1:-keep_recent]        # 待总结
-    tail = self.messages[-keep_recent:]           # 末尾 keep_recent 条保留
-
-    if not middle:
-        return False
-
-    summary_text = await _summarize(client, middle, self.config)
-    summary_message = {
-        "role": "user",
-        "content": f"<conversation_summary>\n{summary_text}\n</conversation_summary>",
-    }
-    self.messages = head + [summary_message] + tail
-    self.compactions += 1
-    return True
+head = self.messages[:1]                            # 种子任务
+middle = self.messages[1:tail_start]                # 待总结
+tail = self.messages[tail_start:]                   # 原样保留
 ```
 
-**为什么 keep_recent ≥ 2**：默认 4。任何"工具调用 + 结果"配对最多占 2 条消息（assistant tool_use + user tool_result），keep 4 给一个 buffer：哪怕最近两轮各有一对配对也能完整保留。
+默认 `compact_keep_recent=4` 本来碰巧安全：压缩发生在一轮工具往返之后，最后一条一定是 tool_result，偶数条的尾巴一定从 assistant 开头。但只要有人把它改成奇数，尾巴就从一个 tool_result 开头，而它的 tool_use 被总结掉了。现在尾巴遇到这种情况会多带一条。
 
-**触发时机**：在 [agent_loop.py](../codelet/agent_loop.py) `run_async` 里，**只在一个 turn 完整结束后**调用：
+**L3：硬上限也不能留下孤立的 tool_result**：
+
+```python
+if len(self.messages) > max_msgs:
+    start = len(self.messages) - (max_msgs - 1)
+    while start < len(self.messages) and _is_tool_result_turn(self.messages[start]):
+        start += 1                                  # 宁可比上限少一两条
+    self.messages = self.messages[:1] + self.messages[start:]
+```
+
+**这是一个真实踩过的坑**：原来的硬上限是 `messages[:1] + messages[-(max-1):]`，只按条数切。大量小工具调用的长会话里，100 条消息时 token 估算才 ~700，远没到 15 万的压缩阈值，于是压缩从不触发、硬上限先出手；只要保留下来的那段恰好以 tool_result 开头就是 400。模拟 60 轮小工具调用，11 轮出现孤立的 tool_result。修法之外还加了**按条数触发 L2**（`max_context_messages * compact_threshold_ratio`），让这种会话先被总结，而不是被硬上限直接丢掉中段。
+
+**触发时机**：在 [agent_loop.py](../codelet/agent_loop.py) `run_async` 里，**只在一次工具往返完整追加之后**调用，并把 todo 列表作为需要原样保留的状态传进去：
 
 ```python
 self.context.add_assistant_message(response.raw_content)
@@ -235,14 +236,14 @@ self.context.add_tool_results(tool_results)
 
 # ⭐ 此刻 tool_use 和 tool_result 一定已经配对完整
 try:
-    await self.context.compact_if_needed(self.client)
+    await ctx.compact_if_needed(self.client, pinned=self._pinned_state())
 except Exception as exc:
-    self.console.print(f"[dim yellow][compaction skipped: {exc}][/dim yellow]")
+    self._sink.notice(f"compaction skipped: {exc}", level="dim")
 ```
 
-**异常吞掉**：summarizer 调用 Haiku 可能因为各种原因失败（API 限流、网络抖动、key 失效）。**主 agent 不能因为压缩失败崩**。所以包了 try/except，失败仅打 warning。
+**异常吞掉**：summarizer 调用可能因为各种原因失败（API 限流、网络抖动、key 失效）。**主 agent 不能因为压缩失败崩**。所以包了 try/except，失败仅打 warning。也因为失败是静默的，OpenAI 兼容 profile 默认改用它自己的模型做摘要——默认的 `claude-haiku-4-5` 在 DeepSeek、Moonshot 这类端点上不存在，每次都会失败然后被跳过。
 
-**测试中如何验证单调性** ([test_compaction.py](../tests/test_compaction.py))：跑 5 次 `compact_if_needed`，断言 `sizes == sorted(sizes, reverse=True)` —— 压缩永远不会增长 message count，否则就是死循环 bug。
+**测试**（[test_compaction.py](../tests/test_compaction.py)、[test_context.py](../tests/test_context.py)）：跑 5 次 `compact_if_needed` 断言消息数单调不增（否则就是死循环）；奇数 `keep_recent`、奇偶两种硬上限、60 轮小工具调用三种情况下逐轮断言不存在孤立的 tool_result。
 
 ---
 

@@ -30,7 +30,7 @@ Session 持久化 / Slash 命令模板 / Diff 预览**。
 - [x] **P8** 插件系统（tool / prompt-中间件 / tool-中间件 / slash 命令 / system-prompt 段；entry-point + `.codelet/plugins/` 发现，subagent 继承；内置 **sandbox**(独立 Docker 隔离 shell 工具) 与 **rag**(BM25 检索) 插件，见 [docs/plugin-architecture.md](docs/plugin-architecture.md)）+ 图片多模态（Web 上传图片 → vision content block → OpenAI/Anthropic 客户端翻译）
 - [x] **P9** 自进化（self-evolution）：内置 **evolve** 插件提供 `create_tool` 元工具 —— 对话中模型发现缺工具时自己**编写**并经插件系统**热激活**到运行中的会话（下一轮即可调用），落盘 `.codelet/evolved/` 后续启动自动重载；ASK 模式先审阅生成源码、语法/运行错误隔离、核心工具受保护，见 [docs/plugin-architecture.md · 自进化](docs/plugin-architecture.md#自进化agent-自己长出工具)
 
-测试：`199 passed`（`pytest -q`）。
+测试：`219 passed`（`pytest -q`）。
 
 ## 环境
 
@@ -250,13 +250,23 @@ CLI 参数（`--model` `--mode` `--max-turns` 等）优先级 > settings.json > 
 
 ## Context 压缩（P4）
 
-每个 turn 收尾时检查，token 估算超过 `context_window * compact_threshold_ratio`，**或**消息条数达到 `max_context_messages * compact_threshold_ratio`（大量小工具调用时 token 远未到阈值，条数却先到上限）就压缩：
-- 第一条消息（种子任务）保留
-- 最后 `compact_keep_recent` 条保留；若这一段恰好以 tool_result 开头，自动多带上它前面的 tool_use，配对永不被切断
-- 中间被一次 Haiku 调用总结成单个 `<conversation_summary>` 块
-- 失败时只打印警告，**不会**让主 agent 崩
+分四层，便宜的先上，能不调模型就不调：
 
-`max_context_messages` 是最后的硬上限：超出时直接丢弃中段，但同样不会留下孤立的 tool_result（否则下一次 API 调用会 400）。
+| 层 | 何时 | 做什么 | 调 LLM |
+|---|---|---|---|
+| L0 | 单个工具输出超过 `max_output_chars`（默认 3 万字符） | 保留头尾，全文存到临时目录，告诉模型路径（可用 `read_file` 分页读回） | 否 |
+| L1 | token 估算超过 `context_window * compact_clear_ratio`（默认 0.5） | 把尾部以外、长于 `compact_clear_min_chars` 的旧工具输出换成一行占位符（工具名、长度、落盘路径） | 否 |
+| L2 | 仍超过 `context_window * compact_threshold_ratio`（默认 0.75），或消息条数达到 `max_context_messages * compact_threshold_ratio` | 中段交给 `compact_model` 写成七节结构化摘要（目标 / 用户指令 / 决定 / 事实 / 文件 / 进度 / 踩过的坑）；再次压缩时合并上一份摘要而不是再总结一遍；todo 列表原样附在摘要后 | 是 |
+| L3 | 消息条数超过 `max_context_messages` | 硬上限，直接丢弃中段 | 否 |
+
+共同的规则：
+- 第一条消息（种子任务）和最后 `compact_keep_recent` 条永远保留；若尾部恰好以 tool_result 开头，自动多带上它前面的 tool_use，配对永不被切断（L3 同样遵守，否则下一次 API 调用会 400）
+- token 估算以**上一次调用时服务商报告的 `input_tokens`** 为锚点，只对之后追加的消息做本地估算（中文按约 1 字 1 token 计），不再每轮调 count_tokens
+- 压缩失败时只打印警告，**不会**让主 agent 崩
+
+`context_window` 和 `compact_model` 可以按 profile 配置（也可用 `LLM_CONTEXT_WINDOW` / `LLM_COMPACT_MODEL` 环境变量配给 `LLM_*` 那组）。OpenAI 兼容的 profile 如果哪里都没配 `compact_model`，就用它自己的主模型做摘要——默认的 `claude-haiku-4-5` 在 DeepSeek、Moonshot 这类端点上不存在，每次压缩都会失败。
+
+保留效果的评测见 [`evals/compaction/retention.py`](evals/compaction/retention.py)：6 个合成会话、60 个埋入的事实，旧版自由文本摘要答对 55 个，新的结构化摘要 59 个；默认分层配置上下文里答对 57 个（另 3 个在落盘文件里可读回），摘要模型的输入 token 少约 80%。结果和局限详见 [docs/interview-qa.md · Q12](docs/interview-qa.md)。
 
 ## Telemetry（P4）
 
@@ -332,7 +342,7 @@ eval / subagent / 一次性 prompt 场景默认关流式（拿完整结果更省
 ## 测试
 
 ```bash
-pytest -q          # 198 passed
+pytest -q          # 219 passed
 ```
 
 ## 目录结构（P1–P6）

@@ -256,38 +256,49 @@ maybe("todo_write", lambda: TodoWriteTool(self.todo_store))
 
 ---
 
-### Q12. Context 自动压缩为什么用单独的 Haiku 而不是直接截断？
+### Q12. Context 自动压缩是怎么设计的？为什么不直接截断？
 
 截断策略最简单（"删掉最老的一半"），但有两个问题：
 
 1. **信息丢失**：早期 user 决策（"我们用 Python 3.10"）丢了之后，后续 turn 可能 LLM 又重新问一遍
 2. **可能切坏 tool_use/tool_result 配对**：朴素截断不感知消息边界，容易把"工具调用"和它的"结果"切散，下一次 API 调用直接 400
 
-我的实现 ([context.py](../codelet/context.py))：
+我的实现是**分层**的，便宜的先上（[context.py](../codelet/context.py)）：
 
-```python
-head = self.messages[:1]                      # 第一条永远保留
-tail = self.messages[-keep_recent:]           # 末尾 keep_recent 条永远保留（含完整 tool 配对）
-middle = self.messages[1:-keep_recent]
-summary = await _summarize(client, middle, config)   # 用 Haiku 总结中段
-self.messages = head + [summary_msg] + tail
-```
+| 层 | 触发 | 做法 | 调 LLM |
+|---|---|---|---|
+| L0 | 单个工具输出超过 3 万字符 | 保留头尾，全文落盘，告诉模型路径 | 否 |
+| L1 | 估算超过窗口 50% | 旧工具输出换成「工具名 + 长度 + 落盘路径」占位符 | 否 |
+| L2 | 仍超过 75%，或消息条数到阈值 | 中段写成七节结构化摘要，滚动合并上一份，todo 列表原样附上 | 是（`compact_model`） |
+| L3 | 条数超过硬上限 | 丢弃中段，但不留孤立的 tool_result | 否 |
 
-为什么用 **Haiku** 而不是当前用的主模型：
+几个关键决定：
 
-- **便宜**：Haiku 4.5 是 $1/M in / $5/M out，主模型 Sonnet 是 $3/M / $15/M（3-5 倍差）
-- **快**：Haiku 延迟更低，压缩不会卡住主循环太久
-- **够用**：上下文总结不需要顶级推理能力
+- **token 估算以服务商报告的 `input_tokens` 为锚**，只对之后追加的部分做本地估算。原来用 `len // 4`，中文会被低估约 4 倍，压缩触发太晚。
+- **L1 在 L2 之前**：一个编码 agent 的上下文大头是旧工具输出，而模型早已根据它们行动过。不调模型就能省下大部分空间；需要原文时读落盘文件即可，不必重跑工具（日志会轮转、命令不一定幂等）。
+- **摘要结构化**，分「用户指令」和「决定」两节。评测里发现，写成一段自由文本时，最常丢的是 agent **自己做的决定**（比如把函数改成什么名字）。
+- **摘要模型跟着 profile 走**：默认 `claude-haiku-4-5` 在 DeepSeek、Moonshot 这类 OpenAI 兼容端点上不存在，而压缩失败是静默跳过的——等于从没压缩过。现在 OpenAI 兼容 profile 默认用它自己的模型。
 
-`compact_model` 字段在 settings.json 可配。如果用户用的是 OpenAI 兼容 provider，要么 Haiku 不可用，要么把 `compact_model` 设成 `gpt-4o-mini` 或同 provider 的便宜模型。
+**评测**（[evals/compaction/retention.py](../evals/compaction/retention.py)）：6 个合成会话，每个在前 3/4 埋 10 个事实（用户指令 / agent 决定 / 被复述的工具输出 / 只在工具输出里出现过的值），压缩后让模型只凭上下文回答。摘要和作答都用 claude-haiku-4-5：
+
+| 策略 | 上下文里答对 | 含可从落盘文件读回的 | 摘要模型输入 token |
+|---|---|---|---|
+| 不压缩（上界） | 60/60 | 60/60 | 0 |
+| 旧版：一段 500 token 的自由文本摘要 | 55/60 | 55/60 | 278k |
+| 只用新的结构化摘要 | 59/60 | 59/60 | 280k |
+| 默认分层（L1 → L2） | 57/60 | 60/60 | 55k |
+
+两处要说清楚的局限：样本是合成的、规模小，同一配置两次运行会差一两个事实；分层丢的 3 个都是「只在工具输出里出现过」的值，它们还在落盘文件里，但评测里答题的模型不能读文件。
+
+**第一版结构化提示词其实比旧版更差**（40 个事实答对 35 个，旧版 38 个）：规则写在 user 消息里被抄进了摘要，「约束与决定」合成一节时 agent 的决定被用户指令挤掉，工具输出里的值也没有地方放。把规则移进 system、拆开这两节、加一节「事实」之后才反超。这是评测的价值：没有它，我会上线一个更差的版本还以为是改进。
 
 **异常吞掉**：summarizer 调用可能失败（限流、网络、key 失效）。**主 agent 不能因为压缩失败而崩**：
 
 ```python
 try:
-    await self.context.compact_if_needed(self.client)
+    await ctx.compact_if_needed(self.client, pinned=self._pinned_state())
 except Exception as exc:
-    self.console.print(f"[dim yellow][compaction skipped: {exc}][/dim yellow]")
+    self._sink.notice(f"compaction skipped: {exc}", level="dim")
 ```
 
 详见 [technical-details.md §6](technical-details.md#6-context-压缩的安全切片)。

@@ -21,7 +21,9 @@ Schema (all fields optional):
           "provider": "openai",
           "base_url": "https://api.deepseek.com/v1",
           "model": "deepseek-chat",
-          "api_key_env": "DEEPSEEK_API_KEY"
+          "api_key_env": "DEEPSEEK_API_KEY",
+          "context_window": 128000,        // optional; overrides the top-level value
+          "compact_model": "deepseek-chat" // optional; default for openai = the model itself
         }
         // ...
       },
@@ -30,6 +32,7 @@ Schema (all fields optional):
       "max_turns": 30,
       "max_tokens": 8192,
       "context_window": 200000,
+      "compact_clear_ratio": 0.5,
       "compact_threshold_ratio": 0.75,
       "compact_keep_recent": 4,
       "compact_model": "claude-haiku-4-5",
@@ -211,6 +214,8 @@ def resolve_profile(settings: dict[str, Any], profile_name: str | None = None) -
             "base_url": str | None,
             "api_key": str | None,       // None if missing -> CLI surfaces a friendly error
             "api_key_env": str | None,   // for diagnostics ("export X=...")
+            "context_window": int | None,  // per-model window; overrides settings.json
+            "compact_model": str | None,   // summarizer the profile's endpoint serves
         }
 
     Falls back gracefully when the named profile is missing from settings:
@@ -231,6 +236,8 @@ def resolve_profile(settings: dict[str, Any], profile_name: str | None = None) -
                 "base_url": os.environ.get("LLM_BASE_URL"),
                 "api_key": os.environ.get("LLM_API_KEY"),
                 "api_key_env": "LLM_API_KEY",
+                "context_window": _int_or_none(os.environ.get("LLM_CONTEXT_WINDOW")),
+                "compact_model": os.environ.get("LLM_COMPACT_MODEL") or None,
             }
         name = "anthropic"
 
@@ -259,4 +266,13 @@ def resolve_profile(settings: dict[str, Any], profile_name: str | None = None) -
         "base_url": prof.get("base_url"),
         "api_key": api_key,
         "api_key_env": api_key_env or None,
+        "context_window": _int_or_none(prof.get("context_window")),
+        "compact_model": prof.get("compact_model") or None,
     }
+
+
+def _int_or_none(value: Any) -> int | None:
+    try:
+        return int(value) if value not in (None, "") else None
+    except (TypeError, ValueError):
+        return None

@@ -236,33 +236,35 @@ sequenceDiagram
 
 ## 6. Context 自动压缩
 
-每个 turn 收尾时（**绝不在 tool_use → tool_result 配对之间**）触发：
+每一次工具往返完整追加之后（**绝不在 tool_use → tool_result 配对之间**）触发，便宜的层先上：
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant LP as run_async
     participant CTX as Context
-    participant LLM as LLMClient (Haiku)
+    participant LLM as LLMClient (compact_model)
 
-    Note over LP: 一个 turn 完整结束<br/>已 add_tool_results
-    LP->>CTX: compact_if_needed(client)
-    CTX->>CTX: estimate_tokens()
-    CTX->>CTX: > context_window * compact_threshold_ratio?
-    alt 不超 → 直接返回 False
-        CTX-->>LP: False
-    else 超阈值
-        Note over CTX: head = messages[:1] (种子任务)<br/>tail = messages[-keep_recent:]<br/>middle = messages[1:-keep_recent]
-        CTX->>LLM: chat(model=compact_model="claude-haiku-4-5",<br/>system="你是上下文总结助手",<br/>user=渲染中段)
-        LLM-->>CTX: summary text
-        CTX->>CTX: messages = head + [user("<summary>...")] + tail
-        CTX->>CTX: compactions += 1
+    Note over LP: 一次工具往返结束<br/>已 add_tool_results
+    Note over LP: L0 已在写入时把超长的单个输出<br/>截成头尾 + 落盘路径
+    LP->>CTX: compact_if_needed(client, pinned=todo 列表)
+    CTX->>CTX: estimate_tokens()<br/>= 上次调用的 input_tokens + 之后追加部分的估算
+    opt 超过 window * compact_clear_ratio，且没到条数阈值
+        Note over CTX: L1：尾部以外的长工具输出<br/>换成「工具名 + 长度 + 落盘路径」占位符
+    end
+    alt 仍未超 window * compact_threshold_ratio，且条数未到阈值
+        CTX-->>LP: 是否做过 L1
+    else 需要 L2
+        Note over CTX: head = 种子任务<br/>tail = 最后 keep_recent 条（不从 tool_result 开头）<br/>middle 里若有上一份摘要 → 作为 previous_summary
+        CTX->>LLM: chat(system=七节摘要规则,<br/>user=previous_summary + events)
+        LLM-->>CTX: 结构化摘要
+        CTX->>CTX: messages = head + [摘要 + pinned 状态] + tail
         CTX-->>LP: True
     end
     Note over LP: 失败则吞掉异常 + warning<br/>主 agent 不会因压缩死
 ```
 
-**为什么不在 tool 配对中间压缩**：Anthropic API 要求每个 `tool_use` 后必须紧跟其 `tool_result`，如果切片切到中间会让 API 直接 400。
+**为什么不在 tool 配对中间压缩**：Anthropic API 要求每个 `tool_use` 后必须紧跟其 `tool_result`，如果切片切到中间会让 API 直接 400。L2 的尾部和 L3 的硬上限都遵守这条（见 [technical-details.md §6](technical-details.md#6-context-压缩的安全切片)）。
 
 ---
 

@@ -40,15 +40,18 @@ class Config:
     stream: bool = True
 
     # Context
-    max_context_messages: int = 100
-    max_output_chars: int = 50_000
+    max_context_messages: int = 100             # L3 hard ceiling
+    max_output_chars: int = 30_000              # L0: longer tool outputs spill to a temp file
 
-    # Compaction (P4)
+    # Compaction (P4; layers documented in context.py). Per profile, see
+    # cli._build_config: `context_window` and `compact_model` follow the model.
     context_window: int = 200_000               # tokens; sonnet-4-5 default
-    compact_threshold_ratio: float = 0.75       # trigger when est tokens > ratio * window
+    compact_clear_ratio: float = 0.5            # L1: clear old tool outputs past ratio * window
+    compact_clear_min_chars: int = 2_000        # L1: only outputs longer than this are cleared
+    compact_threshold_ratio: float = 0.75       # L2: summarize past ratio * window
     compact_keep_recent: int = 4                # last N messages always preserved
     compact_model: str = "claude-haiku-4-5"     # cheap summarizer
-    compact_summary_target_tokens: int = 500    # ~tokens for the produced summary
+    compact_summary_target_tokens: int = 1_000  # seven structured sections; was 500 as free prose
 
     # Hooks (P4): keyed by event name -> list of {"matcher": "...", "command": "..."}
     hooks: dict[str, list[dict[str, str]]] = field(default_factory=dict)

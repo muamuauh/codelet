@@ -20,7 +20,8 @@ def clean_env(monkeypatch):
     """Strip any pre-existing API key env vars so tests are deterministic."""
     for var in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "DEEPSEEK_API_KEY",
                 "OPENROUTER_API_KEY", "OLLAMA_API_KEY", "MOONSHOT_API_KEY",
-                "LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL", "LLM_PROVIDER"):
+                "LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL", "LLM_PROVIDER",
+                "LLM_COMPACT_MODEL", "LLM_CONTEXT_WINDOW"):
         monkeypatch.delenv(var, raising=False)
     yield monkeypatch
 
@@ -301,3 +302,47 @@ def test_settings_profiles_user_and_project_merge(tmp_path: Path):
     }), encoding="utf-8")
     merged = load_settings(project_dir=project_dir, user_path=user)
     assert merged["profiles"]["anthropic"]["model"] == "claude-from-project"
+
+
+# ---------- compaction follows the model in use ----------
+
+def _cfg(settings: dict, profile: str | None = None):
+    from argparse import Namespace
+    from codelet.cli import _build_config
+    return _build_config(Namespace(profile=profile, provider=None, model=None, base_url=None,
+                                   api_key=None, mode=None, max_turns=None), settings)
+
+
+def test_openai_profile_summarizes_with_its_own_model(clean_env):
+    """The default summarizer is an Anthropic id; a DeepSeek endpoint does not
+    serve it, so every compaction would fail and be skipped."""
+    cfg = _cfg({"profiles": {"ds": {"provider": "openai", "model": "deepseek-chat",
+                                    "base_url": "https://api.deepseek.com/v1"}}}, "ds")
+    assert cfg.compact_model == "deepseek-chat"
+
+
+def test_anthropic_profile_keeps_the_cheap_default(clean_env):
+    assert _cfg({}, "anthropic").compact_model == "claude-haiku-4-5"
+
+
+def test_profile_context_window_and_compact_model_win(clean_env):
+    cfg = _cfg({"context_window": 200_000, "compact_model": "top-level-model",
+                "profiles": {"k": {"provider": "openai", "model": "kimi",
+                                   "context_window": 128_000, "compact_model": "kimi-mini"}}}, "k")
+    assert cfg.context_window == 128_000
+    assert cfg.compact_model == "kimi-mini"
+
+
+def test_explicit_top_level_compact_model_is_respected(clean_env):
+    cfg = _cfg({"compact_model": "cheap-one",
+                "profiles": {"ds": {"provider": "openai", "model": "deepseek-chat"}}}, "ds")
+    assert cfg.compact_model == "cheap-one"
+
+
+def test_env_profile_reads_compaction_vars(clean_env):
+    clean_env.setenv("LLM_API_KEY", "k")
+    clean_env.setenv("LLM_MODEL", "vendor/big")
+    clean_env.setenv("LLM_COMPACT_MODEL", "vendor/small")
+    clean_env.setenv("LLM_CONTEXT_WINDOW", "64000")
+    cfg = _cfg({})
+    assert (cfg.compact_model, cfg.context_window) == ("vendor/small", 64_000)

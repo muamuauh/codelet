@@ -92,14 +92,16 @@ def _build_config(args: argparse.Namespace, settings: dict[str, Any]) -> Config:
         except ValueError:
             pass
     for key in ("max_turns", "max_tokens", "context_window", "compact_keep_recent",
-                "compact_summary_target_tokens"):
+                "compact_summary_target_tokens", "compact_clear_min_chars",
+                "max_output_chars", "max_context_messages"):
         if key in settings and isinstance(settings[key], int):
             setattr(cfg, key, settings[key])
-    if "compact_threshold_ratio" in settings:
-        try:
-            cfg.compact_threshold_ratio = float(settings["compact_threshold_ratio"])
-        except (TypeError, ValueError):
-            pass
+    for key in ("compact_threshold_ratio", "compact_clear_ratio"):
+        if key in settings:
+            try:
+                setattr(cfg, key, float(settings[key]))
+            except (TypeError, ValueError):
+                pass
     if "compact_model" in settings:
         cfg.compact_model = str(settings["compact_model"])
     if "stream" in settings and isinstance(settings["stream"], bool):
@@ -145,6 +147,17 @@ def _build_config(args: argparse.Namespace, settings: dict[str, Any]) -> Config:
         cfg.max_turns = args.max_turns
     if getattr(args, "no_stream", False):
         cfg.stream = False
+
+    # ---- compaction follows the model actually in use ----
+    if profile.get("context_window"):
+        cfg.context_window = profile["context_window"]
+    if profile.get("compact_model"):
+        cfg.compact_model = profile["compact_model"]
+    elif "compact_model" not in settings and cfg.provider != LLMProvider.ANTHROPIC:
+        # The default summarizer is an Anthropic model id, which an OpenAI-
+        # compatible endpoint (DeepSeek, Moonshot, ...) may not serve -- every
+        # compaction would then fail and be skipped. Its own model always exists.
+        cfg.compact_model = cfg.model
 
     return cfg
 

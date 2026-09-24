@@ -84,3 +84,55 @@ def test_check_missing_file_fails(tmp_path: Path):
     [res] = run_checks(tmp_path, [{"file": "nope.txt", "contains": "x"}])
     assert res.passed is False
     assert "missing" in res.detail
+
+
+# ---------- compaction retention eval: scenarios are well-formed ----------
+
+def test_retention_scenarios_are_valid_sessions():
+    """Offline check of the eval's own fixtures: pairing is valid, every planted
+    answer is in the session, and none sits in the tail compaction preserves."""
+    from codelet.context import _render_message
+    from evals.compaction.retention import build_scenario
+
+    for seed, family in ((7, "tools"), (8, "chat"), (9, "tools")):
+        sc = build_scenario(seed, family)
+        seen: set[str] = set()
+        for m in sc.messages:
+            for b in m["content"] if isinstance(m["content"], list) else []:
+                if b["type"] == "tool_use":
+                    seen.add(b["id"])
+                elif b["type"] == "tool_result":
+                    assert b["tool_use_id"] in seen
+        roles = [m["role"] for m in sc.messages]
+        assert all(a != b for a, b in zip(roles, roles[1:]))      # strictly alternating
+        body = "\n".join(_render_message(m) for m in sc.messages[1:-6])
+        tail = "\n".join(_render_message(m) for m in sc.messages[-6:])
+        assert len(sc.facts) == 10
+        for fact in sc.facts:
+            assert fact.answer in body, (sc.name, fact.key)
+            assert fact.answer not in tail, (sc.name, fact.key)
+
+
+def test_retention_strategies_run_offline():
+    """Every strategy runs end to end against a stub summarizer -- a crash here
+    would otherwise surface only after paying for a live run."""
+    import asyncio
+    import copy
+
+    from codelet.config import Config
+    from codelet.llm.base import LLMClient, LLMResponse
+    from evals.compaction.retention import STRATEGIES, build_scenario, run_strategy
+
+    class Stub(LLMClient):
+        def chat(self, **kwargs):
+            return LLMResponse(text_blocks=["## Goal - stub"], stop_reason="end_turn",
+                               raw_content=[], usage={"input_tokens": 1, "output_tokens": 1})
+
+    for family in ("tools", "chat"):
+        sc = build_scenario(7, family)
+        cfg = Config(context_window=20_000)
+        for name in STRATEGIES:
+            out = asyncio.run(run_strategy(name, sc, Stub(), copy.copy(cfg)))
+            assert out.messages[0] == sc.messages[0]
+            if name in ("baseline", "structured"):
+                assert out.summarizer_calls == 1 and "stub" in out.summary
