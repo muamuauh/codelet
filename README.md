@@ -16,7 +16,7 @@ Session 持久化 / Slash 命令模板 / Diff 预览**。
 - [技术细节深入](docs/technical-details.md) — 12 个有坑的实现点
 - [面试式 Q&A](docs/interview-qa.md) — 30 个设计权衡问题
 - [实现路线图](docs/implementation-plan.md) — phase 划分
-- [插件架构](docs/plugin-architecture.md) — 插件接口 + 内置 sandbox / rag / **evolve 自进化**（P8 / P9）
+- [插件架构](docs/plugin-architecture.md) — 插件接口 + 内置 sandbox / rag / **evolve 自进化** / **memory 跨会话记忆**（P8 / P9 / P11）
 
 ## 当前进度
 
@@ -29,8 +29,10 @@ Session 持久化 / Slash 命令模板 / Diff 预览**。
 - [x] **P7** 本地 Web GUI（FastAPI + WebSocket + 原生前端）：流式聊天 + 工具卡片 + diff 审批 + 会话/画像/遥测，核心经 `AgentSink` 解耦
 - [x] **P8** 插件系统（tool / prompt-中间件 / tool-中间件 / slash 命令 / system-prompt 段；entry-point + `.codelet/plugins/` 发现，subagent 继承；内置 **sandbox**(独立 Docker 隔离 shell 工具) 与 **rag**(BM25 检索) 插件，见 [docs/plugin-architecture.md](docs/plugin-architecture.md)）+ 图片多模态（Web 上传图片 → vision content block → OpenAI/Anthropic 客户端翻译）
 - [x] **P9** 自进化（self-evolution）：内置 **evolve** 插件提供 `create_tool` 元工具 —— 对话中模型发现缺工具时自己**编写**并经插件系统**热激活**到运行中的会话（下一轮即可调用），落盘 `.codelet/evolved/` 后续启动自动重载；ASK 模式先审阅生成源码、语法/运行错误隔离、核心工具受保护，见 [docs/plugin-architecture.md · 自进化](docs/plugin-architecture.md#自进化agent-自己长出工具)
+- [x] **P10** 分层上下文压缩（写入时截断 → 零 LLM 清理旧工具输出 → 七节结构化滚动摘要 → 保持配对的硬上限，token 预算以服务商 usage 为锚）+ 保留评测，见 [Context 压缩](#context-压缩p4)
+- [x] **P11** 跨会话记忆：内置 **memory** 插件（有类型的 markdown 条目、索引进系统提示词、按 key 覆盖、ASK 模式 diff 审批、拒存密钥）+ 两次会话评测：会话 2 照做用户纠正的比例从 3/20 到 19/20，见 [docs/plugin-architecture.md · 记忆](docs/plugin-architecture.md#记忆下一次会话该知道的少量事实)
 
-测试：`219 passed`（`pytest -q`）。
+测试：`239 passed`（`pytest -q`）。
 
 ## 环境
 
@@ -342,7 +344,7 @@ eval / subagent / 一次性 prompt 场景默认关流式（拿完整结果更省
 ## 测试
 
 ```bash
-pytest -q          # 219 passed
+pytest -q          # 239 passed
 ```
 
 ## 目录结构（P1–P6）

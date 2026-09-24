@@ -30,6 +30,7 @@ _BUILTIN = {
     "sandbox": "codelet.plugins.builtin.sandbox",
     "rag": "codelet.plugins.builtin.rag",
     "evolve": "codelet.plugins.builtin.evolve",
+    "memory": "codelet.plugins.builtin.memory",
 }
 
 

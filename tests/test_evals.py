@@ -136,3 +136,110 @@ def test_retention_strategies_run_offline():
             assert out.messages[0] == sc.messages[0]
             if name in ("baseline", "structured"):
                 assert out.summarizer_calls == 1 and "stub" in out.summary
+
+
+# ---------- two-session memory eval: the checks judge session 2 correctly ----------
+
+def _ws(tmp_path, files: dict[str, str]):
+    for rel, text in files.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(text, encoding="utf-8")
+    return tmp_path
+
+
+def test_memory_eval_checks_only_judge_what_session_two_did(tmp_path):
+    from evals.memory.two_session import (
+        _check_header, _check_logging, _check_naming, _check_reports, _check_stdlib, _snapshot)
+
+    # naming: session 1 already left a correct check_calc.py; session 2 must add subtract there
+    # or in another check_*.py, and must not create a test_*.py.
+    ws = _ws(tmp_path / "n", {"calc.py": "x", "check_calc.py": "def test_add(): ..."})
+    before = _snapshot(ws)
+    (ws / "test_subtract.py").write_text("def test_subtract(): ...", encoding="utf-8")
+    assert _check_naming(ws, before)[0] is False
+    (ws / "test_subtract.py").unlink()
+    (ws / "check_calc.py").write_text("def test_add(): ...\ndef test_subtract(): ...", encoding="utf-8")
+    assert _check_naming(ws, before)[0] is True
+
+    ws = _ws(tmp_path / "r", {"data.csv": "a"})
+    before = _snapshot(ws)
+    (ws / "cities.md").write_text("# cities", encoding="utf-8")
+    assert _check_reports(ws, before)[0] is False
+    (ws / "cities.md").unlink()
+    _ws(ws, {"out/reports/cities.md": "# cities"})
+    assert _check_reports(ws, before)[0] is True
+
+    ws = _ws(tmp_path / "h", {"mathutil.py": "# SPDX-License-Identifier: MIT\ndef clamp(): ..."})
+    assert _check_header(ws, {})[0] is True
+    (ws / "mathutil.py").write_text('"""doc"""\n# SPDX-License-Identifier: MIT\n', encoding="utf-8")
+    assert _check_header(ws, {})[0] is False
+
+    ws = _ws(tmp_path / "l", {"archive.py": "import logging\nlogging.info('added %d', n)\n"})
+    assert _check_logging(ws, {})[0] is True
+    (ws / "archive.py").write_text("import logging\nprint('added', n)\n", encoding="utf-8")
+    assert _check_logging(ws, {})[0] is False
+
+    ws = _ws(tmp_path / "s", {"post.py": "import json\nimport urllib.request\n"})
+    assert _check_stdlib(ws, {})[0] is True
+    (ws / "post.py").write_text("import requests\n", encoding="utf-8")
+    assert _check_stdlib(ws, {})[0] is False
+
+
+def test_memory_eval_isolates_plugins():
+    """Baseline must run with no plugins at all, including ~/.codelet/plugins."""
+    from pathlib import Path
+
+    from codelet.config import Config
+    from evals.memory.two_session import _agent
+
+    from codelet.llm.base import LLMClient
+
+    class _Stub(LLMClient):
+        def chat(self, **kwargs):
+            raise AssertionError("constructing an agent must not call the model")
+
+    base = Config()
+    ws = Path(".")
+    off = _agent(base, ws, ws, memory=False, client=_Stub())
+    on = _agent(base, ws, ws, memory=True, client=_Stub())
+    assert off.registry.get("memory") is None and off.config.plugins == {"enabled": []}
+    assert on.registry.get("memory") is not None
+    assert "## Memory (persists across sessions)" in on.context.system_prompt
+
+
+def test_memory_eval_run_scenario_offline():
+    """The whole harness against a scripted model: session 1 writes a test and a
+    memory, session 2 writes check_calc.py in both the kept and the clean copy."""
+    from codelet.config import Config
+    from codelet.llm.base import LLMClient, LLMResponse, ToolCall
+    from evals.memory.two_session import SCENARIOS, run_scenario
+
+    def tool(name: str, **inp) -> LLMResponse:
+        call = ToolCall(id=f"toolu_{name}_{len(inp)}", name=name, input=inp)
+        return LLMResponse(tool_calls=[call], stop_reason="tool_use", raw_content=[
+            {"type": "tool_use", "id": call.id, "name": name, "input": inp}])
+
+    done = LLMResponse(text_blocks=["done"], raw_content=[{"type": "text", "text": "done"}],
+                       stop_reason="end_turn")
+
+    class Scripted(LLMClient):
+        def __init__(self, script):
+            self.script = list(script)
+
+        def chat(self, **kwargs):
+            return self.script.pop(0) if self.script else done
+
+    s2 = [tool("write_file", path="check_calc.py", content="def test_subtract(): ..."), done]
+    script = [tool("write_file", path="test_calc.py", content="def test_add(): ..."), done,
+              tool("memory", action="write", key="test-naming", type="feedback",
+                   description="Tests are named check_*.py here", content="Never test_*.py."),
+              done, *s2, *s2]
+    naming = next(s for s in SCENARIOS if s.name == "naming")
+
+    rows = run_scenario(naming, Config(), memory=True, client=Scripted(script))
+    assert [r["variant"] for r in rows] == ["kept", "clean"]
+    assert all(r["ok"] and not r["error"] for r in rows), rows
+    assert rows[0]["memories_saved"] == ["test-naming.md"]
+
+    rows = run_scenario(naming, Config(), memory=False, client=Scripted(script))
+    assert rows[0]["memories_saved"] == []        # no plugin: the memory call is an unknown tool

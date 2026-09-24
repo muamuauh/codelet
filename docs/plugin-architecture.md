@@ -17,14 +17,15 @@ CLI 与 Web GUI 都已接好），以及 `ctx.host`（指向运行中的 `AgentL
 
 ### 内置插件（随 codelet 发布，但只在显式启用时加载）
 
-`codelet/plugins/builtin/` 下有三个参考实现。它们**绝不会被自动发现** —— 必须在
+`codelet/plugins/builtin/` 下有四个参考实现。它们**绝不会被自动发现** —— 必须在
 settings.json 里点名启用：
 
 ```json
-{"plugins": {"enabled": ["sandbox", "rag", "evolve"],
+{"plugins": {"enabled": ["sandbox", "rag", "evolve", "memory"],
              "config": {"sandbox": {"image": "python:3.12-slim", "network": false},
                         "rag": {"inject": false, "top_k": 3},
-                        "evolve": {"dir": ".codelet/evolved"}}}}
+                        "evolve": {"dir": ".codelet/evolved"},
+                        "memory": {"dir": ".codelet/memory", "user_dir": "~/.codelet/memory"}}}}
 ```
 
 - **sandbox** —— 新增一个**独立的** `sandbox` 工具，每条命令都在一次性 Docker 容器里执行，
@@ -36,6 +37,8 @@ settings.json 里点名启用：
   中间件（把最相关的片段拼到每条消息前）。工作区切换时索引会自动重建。
 - **evolve** —— 自进化：提供 `create_tool` 元工具，让 agent 在对话中途自己写一个新工具并热加载
   进当前会话。见下方[自进化](#自进化agent-自己长出工具)。
+- **memory** —— 跨会话记忆：提供 `memory` 工具（view / write / delete）和 `/memory` 命令，把记忆的
+  索引放进系统提示词。见下方[记忆](#记忆下一次会话该知道的少量事实)。
 
 ## 自进化：Agent 自己长出工具
 
@@ -75,6 +78,51 @@ Agent → create_tool(name="word_freq", parameters={... "path" ...},
         ← "Created and activated tool 'word_freq'. It is now available…"
 Agent → word_freq(path="README.md")   # 下一轮直接调用
 ```
+
+## 记忆：下一次会话该知道的少量事实
+
+codelet 里有三种「记住」，容易混：
+
+| | 记什么 | 活多久 | 在哪 |
+|---|---|---|---|
+| 会话历史 | 整段对话 | 为了 `/resume` | `persistence/session.py` |
+| 压缩摘要 | 当前会话的有损摘要 | 只在本次会话里 | `context.py` |
+| **记忆** | 少量有类型的事实 | **跨会话** | 这个插件 |
+
+**存储。** 一条记忆一个 markdown 文件，带一小段 front matter（`key` / `type` / `description` /
+`source` / `updated`），正文写事实本身、为什么成立、怎么用。`type` 是 user（用户是谁、怎么工作）/
+feedback（对做法的纠正或偏好）/ project（关于这个代码库的事实）/ reference（外部资料在哪）。
+`type: user` 默认存到用户目录（所有项目共享），其余存在项目的 `.codelet/memory/`（默认被 git 忽略）。
+
+**几个取舍：**
+
+- **索引每次从文件现算，不单独存**，所以不会和文件不一致；手工编辑、删除文件就是修改记忆的正当方式。
+- **系统提示词里只放索引**，一条一行（和 skill 一样）；正文用 `view` 按需读。所以 `description`
+  必须写事实本身（「Tests are named check_*.py here」），而不是标题（「Test naming」）——下次会话
+  不点开时，只看得到这一行。
+- **索引在会话开始时读一次，写入后不重建**：系统提示词保持稳定，而本次会话里模型本来就知道自己
+  刚写了什么。
+- **写入按 key 覆盖**，纠正会替换旧条目，而不是再堆一条近似的；key 已存在时沿用它原来的目录。
+  ASK 模式下每次写入和删除都走和 `write_file` 一样的 diff 审批（工具声明 `confirm_in_ask = True`）。
+- **像密钥的内容拒绝写入**：记忆是明文文件，项目的记忆目录可能被提交。
+
+**评测**（[evals/memory/two_session.py](../evals/memory/two_session.py)）：5 个场景，每个是两次会话
+——会话 1 做一件事，然后用户纠正一条项目约定（测试文件命名、报告放哪、文件头、用 logging 不用
+print、只用标准库）；会话 2 是一个全新的 agent，做一件适用这条约定的事，由脚本判定是否照做。会话 2
+在两份工作区里各跑一次：保留会话 1 的文件（贴近真实），和重置成原始文件（只有记忆能带过去）。
+claude-haiku-4-5，每个场景重复 2 次：
+
+| | 保留会话 1 的文件 | 干净工作区 | 会话 1 存下了记忆 |
+|---|---|---|---|
+| 不开记忆 | 2/10 | 1/10 | — |
+| 开记忆（第一版提示） | 8/10 | 7/10 | 6/10 |
+| **开记忆（最终版）** | **9/10** | **10/10** | **10/10** |
+
+第一版的瓶颈不在「想起来」而在「想到要记」：存下了的场景，会话 2 全部照做；两条纠正
+（用 logging、只用标准库）agent 改完代码就结束了，一条都没记。把「用户刚纠正你时，先记下来再去改」
+写进 `memory` 工具自己的描述（而不只是系统提示词末尾的规则）之后，存下率从 6/10 到 10/10。
+局限：场景少、合成的、只用了一个模型；「不开记忆」时会话 1 的文件本身也能带出约定，这正是要分两种
+工作区跑的原因。
 
 ## 最小可用插件
 
@@ -156,6 +204,8 @@ class Plugin(Protocol):
 - `_dispatch_one`：把 `tool.aexecute` 包进 `wrap_tool` 中间件链 —— 审计器在这里观察执行。
   原有的 shell hooks 保持不变；插件中间件是它在进程内更强的兄弟。
 - 子 agent 通过 `inherit_plugins_from(parent)` 按引用继承父级已应用的插件（和 skills / hooks 一样）。
+- `Tool.confirm_in_ask`：工具声明为 True 时，ASK 模式下只要它的 `preview_diff` 返回了 diff，就要等
+  用户批准——插件工具不必让核心知道自己的名字就能接入审批（`memory` 用的就是它）。
 
 ## 两个内置插件是怎么落地的
 

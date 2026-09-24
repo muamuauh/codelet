@@ -601,7 +601,7 @@ class AgentLoop:
         # It may be sync (CLI y/N) or async (web round-trip) -- await if awaitable.
         if (
             self.config.permission_mode == PermissionMode.ASK
-            and call.name in _DIFF_CONFIRM_TOOLS
+            and (call.name in _DIFF_CONFIRM_TOOLS or tool.confirm_in_ask)
             and self._confirm_callback is not None
         ):
             preview = tool.preview_diff(tool_input)

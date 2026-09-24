@@ -23,6 +23,11 @@ class ToolResult:
 
 
 class Tool(ABC):
+    # True: in ASK mode, a call whose `preview_diff` returns a diff waits for the
+    # user's approval, like write_file. Lets a plugin tool opt in without the loop
+    # having to know its name.
+    confirm_in_ask: bool = False
+
     @property
     @abstractmethod
     def name(self) -> str: ...

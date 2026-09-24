@@ -20,6 +20,10 @@ dist/
 # copy one into .codelet/plugins/ or the repo to keep it deliberately).
 .codelet/evolved/
 
+# Memory plugin: facts the agent saved about working with you (personal by
+# default; remove this line to share a project's memory through the repo).
+.codelet/memory/
+
 # Eval run reports
 evals/reports/
 evals/swebench/out/
