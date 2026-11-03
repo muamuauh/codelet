@@ -6,6 +6,9 @@ bodies stay behind the `skill` tool.
 """
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 from .context import load_project_instructions
 from .skills.loader import SkillIndex
 from .tools.base import ToolRegistry
@@ -27,6 +30,7 @@ You have access to the following tools:
 7. Delegate focused subtasks (research across many files, repetitive analysis)
    to the `task` tool -- multiple Task calls in one turn run in parallel.
 
+{environment_section}
 ## Current Permission Mode: {permission_mode}
 {mode_description}
 {skill_section}{project_instructions}"""
@@ -36,6 +40,41 @@ MODE_DESCRIPTIONS = {
     "auto": "In AUTO mode, all operations are auto-approved (use with caution).",
     "plan": "In PLAN mode, only read-only operations are allowed; writes are blocked.",
 }
+
+
+def environment_section(cwd: str | Path | None = None, shell: str | None = None) -> str:
+    """Where commands actually run. The model otherwise assumes a POSIX shell.
+
+    The first eval suite (docs/evaluation.md) measured what that costs: 8 of
+    the 20 failed bash calls were POSIX syntax handed to cmd.exe -- `[ -f x ]`,
+    `python - <<'PY'`, `VAR=1 cmd`, `rg` -- and 7 were `git status` in a
+    directory that is not a repository. Both are facts the loop knows and the
+    model cannot see.
+    """
+    from .tools.bash_tool import resolve_shell
+
+    here = Path(cwd or os.getcwd())
+    kind = shell or resolve_shell()[0]
+    in_git = any((d / ".git").exists() for d in (here, *here.parents))
+    shell = {
+        "pwsh": ("Windows. The `bash` tool runs commands in **PowerShell 7** (pwsh), not bash. "
+                 "Use PowerShell syntax: `Test-Path x` instead of `[ -f x ]`, "
+                 "`$env:NAME = 'v'; cmd` instead of `NAME=v cmd`, here-strings `@'...'@` "
+                 "instead of heredocs, `& 'C:\\path with spaces\\x.exe'` to run a quoted path. "
+                 "`&&` and `||` work. `ls` / `cat` / `rm` are aliases "
+                 "for cmdlets and do not take POSIX flags (`ls -la` fails). Prefer the "
+                 "read_file / glob / grep tools for inspecting files."),
+        "cmd": ("Windows. The `bash` tool runs commands through **cmd.exe**, not bash: "
+                "POSIX-only syntax fails -- `[ ... ]` tests, heredocs (`<<EOF`), "
+                "`VAR=value cmd` prefixes, single-quoted arguments. `&&` and `||` work. "
+                "Put anything non-trivial in `python -c \"...\"` or a script file, and "
+                "inspect files with the read_file / glob / grep tools rather than the shell."),
+        "sh": "POSIX. The `bash` tool runs commands through /bin/sh.",
+    }[kind]
+    repo = ("is a git repository" if in_git
+            else "is **not** a git repository -- git commands will fail here")
+    return (f"## Environment\n\n- OS / shell: {shell}\n"
+            f"- Working directory: `{here}` ({repo}).\n")
 
 
 def build_system_prompt(
@@ -80,6 +119,7 @@ def build_system_prompt(
         tool_list=tool_list,
         permission_mode=permission_mode.upper(),
         mode_description=MODE_DESCRIPTIONS.get(permission_mode, ""),
+        environment_section=environment_section(project_dir),
         skill_section=skill_section,
         project_instructions=project_section,
     ).strip() + plugin_section

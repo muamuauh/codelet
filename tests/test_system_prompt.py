@@ -29,3 +29,20 @@ def test_prompt_names_the_model_when_given():
 def test_prompt_omits_model_line_by_default():
     prompt = build_system_prompt(ToolRegistry.default())
     assert "served by the model" not in prompt
+
+
+def test_environment_section_names_the_shell_and_git_state(tmp_path):
+    from codelet.system_prompt import environment_section
+
+    win = environment_section(tmp_path, shell="pwsh")
+    assert "PowerShell 7" in win and "Test-Path" in win
+    assert "not** a git repository" in win
+    assert "cmd.exe" in environment_section(tmp_path, shell="cmd")
+    (tmp_path / ".git").mkdir()
+    posix = environment_section(tmp_path / "sub", shell="sh")
+    assert "/bin/sh" in posix and "is a git repository" in posix
+
+
+def test_environment_section_is_in_the_prompt():
+    prompt = build_system_prompt(ToolRegistry(), permission_mode="auto")
+    assert "## Environment" in prompt and "Working directory" in prompt
