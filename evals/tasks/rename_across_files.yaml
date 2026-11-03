@@ -1,0 +1,59 @@
+name: rename_across_files
+category: multi_file
+description: Rename a function across a package and its callers.
+prompt: |
+  把 calc_total 重命名为 compute_total，所有定义和调用处都要改，不要保留旧名字的别名。
+files:
+  billing/__init__.py: |
+    # billing package
+  billing/core.py: |
+    def calc_total(items):
+        return sum(price * qty for price, qty in items)
+  billing/report.py: |
+    from billing.core import calc_total
+
+
+    def summary(items):
+        return f"total={calc_total(items)}"
+  app.py: |
+    from billing.core import calc_total
+    from billing.report import summary
+
+
+    def run():
+        items = [(2.0, 3), (1.5, 2)]
+        return calc_total(items), summary(items)
+  test_app.py: |
+    from app import run
+    from billing.core import compute_total
+
+
+    def test_renamed():
+        assert compute_total([(1, 1)]) == 1
+        assert run() == (9.0, "total=9.0")
+checks:
+  - cmd: python -m pytest -q
+  - file: billing/core.py
+    not_contains: calc_total
+  - file: billing/report.py
+    not_contains: calc_total
+  - file: app.py
+    not_contains: calc_total
+solution:
+  billing/core.py: |
+    def compute_total(items):
+        return sum(price * qty for price, qty in items)
+  billing/report.py: |
+    from billing.core import compute_total
+
+
+    def summary(items):
+        return f"total={compute_total(items)}"
+  app.py: |
+    from billing.core import compute_total
+    from billing.report import summary
+
+
+    def run():
+        items = [(2.0, 3), (1.5, 2)]
+        return compute_total(items), summary(items)

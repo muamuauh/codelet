@@ -1,0 +1,33 @@
+name: fix_mutable_default
+category: bugfix
+description: Find a mutable-default-argument bug from a failing test.
+prompt: |
+  test_cart.py 失败了。找到根本原因并修复 cart.py，不要改测试。
+files:
+  cart.py: |
+    def add_item(item, cart=[]):
+        cart.append(item)
+        return cart
+  test_cart.py: |
+    from cart import add_item
+
+
+    def test_fresh_cart_each_call():
+        assert add_item("a") == ["a"]
+        assert add_item("b") == ["b"]
+
+
+    def test_explicit_cart():
+        c = ["x"]
+        assert add_item("y", c) == ["x", "y"]
+checks:
+  - cmd: python -m pytest -q
+  - file: cart.py
+    not_contains: cart=[]
+solution:
+  cart.py: |
+    def add_item(item, cart=None):
+        if cart is None:
+            cart = []
+        cart.append(item)
+        return cart

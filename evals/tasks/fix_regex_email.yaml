@@ -1,0 +1,40 @@
+name: fix_regex_email
+category: bugfix
+description: Widen an email regex without letting bad input through.
+prompt: |
+  validate.py 的 is_email 把合法地址（带 + 号、大写字母的）判成了非法。修好它，让 test_validate.py 全部通过，非法地址仍然要拒绝。
+files:
+  validate.py: |
+    import re
+
+    _EMAIL = re.compile(r"^[a-z0-9.]+@[a-z0-9-]+(\.[a-z0-9-]+)+$")
+
+
+    def is_email(s):
+        return bool(_EMAIL.match(s))
+  test_validate.py: |
+    from validate import is_email
+
+
+    def test_valid():
+        assert is_email("a.b@x.com")
+        assert is_email("a+tag@x.co.uk")
+        assert is_email("A@X.COM")
+
+
+    def test_invalid():
+        assert not is_email("no-at.com")
+        assert not is_email("a@b")
+        assert not is_email("a@@b.com")
+        assert not is_email("a b@x.com")
+checks:
+  - cmd: python -m pytest -q
+solution:
+  validate.py: |
+    import re
+
+    _EMAIL = re.compile(r"^[a-z0-9._+-]+@[a-z0-9-]+(\.[a-z0-9-]+)+$", re.IGNORECASE)
+
+
+    def is_email(s):
+        return bool(_EMAIL.match(s))

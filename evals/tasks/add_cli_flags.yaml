@@ -1,0 +1,62 @@
+name: add_cli_flags
+category: feature
+description: Add two argparse flags; tests run the script as a subprocess.
+prompt: |
+  给 shout.py 加两个参数：--upper 输出大写；--repeat N 把文本重复 N 次、用空格连接（默认 1）。期望行为见 test_shout.py。
+files:
+  shout.py: |
+    import argparse
+
+
+    def main(argv=None):
+        p = argparse.ArgumentParser()
+        p.add_argument("text")
+        args = p.parse_args(argv)
+        print(args.text)
+
+
+    if __name__ == "__main__":
+        main()
+  test_shout.py: |
+    import subprocess
+    import sys
+
+
+    def run(*args):
+        out = subprocess.run([sys.executable, "shout.py", *args], capture_output=True, text=True)
+        return out.stdout.strip()
+
+
+    def test_plain():
+        assert run("hi") == "hi"
+
+
+    def test_upper():
+        assert run("hi", "--upper") == "HI"
+
+
+    def test_repeat():
+        assert run("hi", "--repeat", "3") == "hi hi hi"
+
+
+    def test_both():
+        assert run("hi", "--upper", "--repeat", "2") == "HI HI"
+checks:
+  - cmd: python -m pytest -q
+solution:
+  shout.py: |
+    import argparse
+
+
+    def main(argv=None):
+        p = argparse.ArgumentParser()
+        p.add_argument("text")
+        p.add_argument("--upper", action="store_true")
+        p.add_argument("--repeat", type=int, default=1)
+        args = p.parse_args(argv)
+        text = args.text.upper() if args.upper else args.text
+        print(" ".join([text] * args.repeat))
+
+
+    if __name__ == "__main__":
+        main()

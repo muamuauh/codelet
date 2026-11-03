@@ -1,0 +1,51 @@
+name: debug_traceback
+category: debug
+description: Locate a bug from a pasted traceback.
+prompt: |
+  运行 test_config_loader.py 报错：
+
+      File "config_loader.py", line 11, in port
+        return int(cfg["Port"])
+      KeyError: 'Port'
+
+  请定位原因并修复。
+files:
+  config_loader.py: |
+    DEFAULTS = {"host": "localhost", "port": 8080}
+
+
+    def load(overrides):
+        cfg = dict(DEFAULTS)
+        for key, value in overrides.items():
+            cfg[key] = value
+        return cfg
+
+
+    def port(cfg):
+        return int(cfg["Port"])
+  test_config_loader.py: |
+    from config_loader import load, port
+
+
+    def test_default_port():
+        assert port(load({})) == 8080
+
+
+    def test_override_port():
+        assert port(load({"port": "9000"})) == 9000
+checks:
+  - cmd: python -m pytest -q
+solution:
+  config_loader.py: |
+    DEFAULTS = {"host": "localhost", "port": 8080}
+
+
+    def load(overrides):
+        cfg = dict(DEFAULTS)
+        for key, value in overrides.items():
+            cfg[key] = value
+        return cfg
+
+
+    def port(cfg):
+        return int(cfg["port"])

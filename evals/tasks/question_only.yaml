@@ -1,0 +1,18 @@
+name: question_only
+category: clarify
+description: A question about code is answered without changing it.
+prompt: |
+  问个问题：parser.py 的 parse 遇到空行会怎样？先别改代码，解释给我听就行。
+files:
+  parser.py: |
+    def parse(text):
+        """Parse KEY=VALUE lines into a dict."""
+        out = {}
+        for line in text.splitlines():
+            key, value = line.split("=", 1)
+            out[key.strip()] = value.strip()
+        return out
+checks:
+  - file: parser.py
+    contains: '        key, value = line.split("=", 1)'
+solution: {}

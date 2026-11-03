@@ -1,0 +1,67 @@
+name: extract_helper
+category: refactor
+description: Extract duplicated validation into one helper, behaviour unchanged.
+prompt: |
+  create_user 和 update_user 里的校验逻辑重复了。把它抽成一个 _validate(name, email) 辅助函数，两处都调用它，行为保持不变。
+files:
+  users.py: |
+    def create_user(name, email):
+        if not name or not name.strip():
+            raise ValueError("name required")
+        if "@" not in email:
+            raise ValueError("bad email")
+        return {"name": name.strip(), "email": email.lower()}
+
+
+    def update_user(user, name, email):
+        if not name or not name.strip():
+            raise ValueError("name required")
+        if "@" not in email:
+            raise ValueError("bad email")
+        user.update(name=name.strip(), email=email.lower())
+        return user
+  test_users.py: |
+    import pytest
+
+    from users import create_user, update_user
+
+
+    def test_create():
+        assert create_user(" Ann ", "A@X.COM") == {"name": "Ann", "email": "a@x.com"}
+
+
+    def test_update():
+        u = {"name": "a", "email": "a@x"}
+        assert update_user(u, "Bob", "B@Y") == {"name": "Bob", "email": "b@y"}
+
+
+    @pytest.mark.parametrize("fn", [lambda n, e: create_user(n, e),
+                                    lambda n, e: update_user({}, n, e)])
+    def test_validation(fn):
+        with pytest.raises(ValueError):
+            fn("  ", "a@x")
+        with pytest.raises(ValueError):
+            fn("Ann", "nope")
+checks:
+  - cmd: python -m pytest -q
+  - file: users.py
+    contains: def _validate
+  - cmd: python -c "import sys; sys.exit(open('users.py', encoding='utf-8').read().count('bad email') != 1)"
+solution:
+  users.py: |
+    def _validate(name, email):
+        if not name or not name.strip():
+            raise ValueError("name required")
+        if "@" not in email:
+            raise ValueError("bad email")
+
+
+    def create_user(name, email):
+        _validate(name, email)
+        return {"name": name.strip(), "email": email.lower()}
+
+
+    def update_user(user, name, email):
+        _validate(name, email)
+        user.update(name=name.strip(), email=email.lower())
+        return user

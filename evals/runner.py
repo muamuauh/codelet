@@ -8,6 +8,12 @@ Pipeline per task:
   4. Run the task's `checks` in the workspace (execution-based: a shell command
      that must exit 0, or a file-content assertion).
   5. Record pass/fail + tokens + cost + wall time.
+  6. Keep the per-step trajectory (evals/reports/traj/<stamp>/<task>.jsonl) and
+     the process metrics read off it (evals/trajectory_metrics.py).
+
+`--repeat k` runs every task k times: pass@1 is the mean over all trials,
+pass@k counts a task solved if any trial passed, pass^k only if all did. The
+gap between the last two is the run-to-run variance a single pass rate hides.
 
 Config (provider/model/key) is resolved exactly like the CLI: .env + settings.json
 + the same flags (`--profile`, `--model`). So `python -m evals.runner` uses
@@ -18,6 +24,15 @@ Usage:
     python -m evals.runner --filter slug    # only tasks whose name contains "slug"
     python -m evals.runner --task evals/tasks/fix_off_by_one.yaml
     python -m evals.runner --profile deepseek --max-turns 20 --verbose
+    python -m evals.runner --repeat 3            # pass@1 / pass@3 / pass^3
+
+Model, prices and a spend cap can come from .env (flags win):
+    CODELET_EVAL_MODEL          blank = LLM_MODEL
+    CODELET_EVAL_PRICE_INPUT    USD per million input tokens
+    CODELET_EVAL_PRICE_OUTPUT   USD per million output tokens
+    CODELET_EVAL_BUDGET_USD     no new task starts once the suite has spent this
+With a budget set, the runner refuses to start unless the model has a price:
+a cost of "n/a" would let the cap pass silently.
 """
 from __future__ import annotations
 
@@ -44,6 +59,9 @@ from codelet.cli import _build_config
 from codelet.config import PermissionMode
 from codelet.settings import load_env_files, load_settings
 from codelet.tools.base import ToolRegistry
+from codelet.trajectory import Trajectory
+
+from evals.trajectory_metrics import aggregate, metrics
 
 TASKS_DIR = Path(__file__).parent / "tasks"
 REPORTS_DIR = Path(__file__).parent / "reports"
@@ -58,6 +76,17 @@ class Task:
     files: dict[str, str] = field(default_factory=dict)
     checks: list[dict[str, Any]] = field(default_factory=list)
     description: str = ""
+    category: str = "general"
+    # Reference fix: files to overwrite after `files`. Never shown to the agent;
+    # tests/test_eval_tasks.py uses it to prove the task is valid (checks fail
+    # on the starting files, pass on the solution). `{}` = the right answer is
+    # to change nothing (clarify tasks), so the starting files must pass.
+    solution: dict[str, str] = field(default_factory=dict)
+    # Written into the workspace only after the agent stops, right before the
+    # checks: SWE-bench's FAIL_TO_PASS / PASS_TO_PASS. The agent works from the
+    # issue text and has to anticipate the edge cases, instead of reading them
+    # off a test file that is sitting next to the code.
+    hidden_files: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -72,6 +101,7 @@ class TaskResult:
     name: str
     passed: bool
     checks: list[CheckResult]
+    category: str = "general"
     input_tokens: int = 0
     output_tokens: int = 0
     cost_usd: float = 0.0
@@ -79,6 +109,9 @@ class TaskResult:
     duration_s: float = 0.0
     error: str | None = None
     transcript_tail: str = ""
+    trial: int = 1
+    trajectory: str | None = None
+    process: dict[str, Any] = field(default_factory=dict)
 
 
 # ---------- task loading ----------
@@ -93,6 +126,9 @@ def load_task(path: Path) -> Task:
         files={str(k): str(v) for k, v in (data.get("files") or {}).items()},
         checks=list(data.get("checks") or []),
         description=str(data.get("description") or ""),
+        category=str(data.get("category") or "general"),
+        solution={str(k): str(v) for k, v in (data.get("solution") or {}).items()},
+        hidden_files={str(k): str(v) for k, v in (data.get("hidden_files") or {}).items()},
     )
 
 
@@ -120,6 +156,10 @@ def _check_env() -> dict[str, str]:
     extra = os.pathsep.join([str(exe_dir), str(exe_dir / "Scripts")])
     env["PATH"] = extra + os.pathsep + env.get("PATH", "")
     env["PYTHONUTF8"] = "1"  # keep subprocess decoding sane on Windows
+    # No .pyc: a .pyc is trusted when the source's mtime (whole seconds) and size
+    # match, so an equal-length edit made within the second of the last test run
+    # (`cfg["Port"]` -> `cfg["port"]`) was graded against the old bytecode.
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
     return env
 
 
@@ -179,6 +219,8 @@ def run_one(
     console: Console,
     verbose: bool = False,
     keep_workspace: bool = False,
+    trace_dir: Path | None = None,
+    trial: int = 1,
 ) -> TaskResult:
     workspace = Path(tempfile.mkdtemp(prefix=f"eval-{task.name}-"))
     transcript = io.StringIO()
@@ -189,11 +231,18 @@ def run_one(
     tokens_in = tokens_out = calls = 0
     cost = 0.0
     started = time.monotonic()
+    trace: Trajectory | None = None
+    if trace_dir is not None:
+        stem = task.name if trial == 1 else f"{task.name}#{trial}"
+        trace = Trajectory(trace_dir / f"{stem}.jsonl", meta={
+            "task": task.name, "trial": trial, "provider": config.provider.value,
+            "model": config.model, "max_turns": config.max_turns})
 
     try:
         _write_files(workspace, task.files)
         os.chdir(workspace)
-        agent = AgentLoop(config=config, registry=ToolRegistry.default(), console=agent_console)
+        agent = AgentLoop(config=config, registry=ToolRegistry.default(), console=agent_console,
+                          trajectory=trace)
         try:
             agent.run(task.prompt)
         except Exception as exc:  # agent crash shouldn't abort the whole suite
@@ -202,6 +251,7 @@ def run_one(
         tokens_in, tokens_out = cum.input_tokens or 0, cum.output_tokens or 0
         cost = cum.cost_usd or 0.0  # None when the model has no pricing entry
         calls = len(agent.telemetry.turns)
+        _write_files(workspace, task.hidden_files)   # after the agent, before grading
         checks = run_checks(workspace, task.checks)
     finally:
         os.chdir(prev_cwd)
@@ -209,8 +259,12 @@ def run_one(
             shutil.rmtree(workspace, ignore_errors=True)
 
     passed = error is None and len(checks) > 0 and all(c.passed for c in checks)
+    if trace is not None:
+        trace.record("eval_result", passed=passed, error=error,
+                     checks=[{"description": c.description, "passed": c.passed} for c in checks])
     return TaskResult(
         name=task.name,
+        category=task.category,
         passed=passed,
         checks=checks,
         input_tokens=tokens_in,
@@ -220,6 +274,9 @@ def run_one(
         duration_s=time.monotonic() - started,
         error=error,
         transcript_tail=transcript.getvalue()[-2000:],
+        trial=trial,
+        trajectory=str(trace.path) if trace is not None else None,
+        process=metrics(trace.events) if trace is not None else {},
     )
 
 
@@ -270,10 +327,37 @@ def render_report(console: Console, results: list[TaskResult]) -> None:
     )
 
 
-def write_json_report(results: list[TaskResult]) -> Path:
+def pass_stats(results: list[TaskResult]) -> dict[str, Any]:
+    """pass@1 over all trials; pass@k / pass^k over tasks (any / every trial passed)."""
+    by_task: dict[str, list[bool]] = {}
+    for r in results:
+        by_task.setdefault(r.name, []).append(r.passed)
+    k = max((len(v) for v in by_task.values()), default=0)
+    n = len(by_task)
+    return {
+        "tasks": n,
+        "trials_per_task": k,
+        "pass@1": round(sum(r.passed for r in results) / len(results), 3) if results else None,
+        f"pass@{k}": round(sum(any(v) for v in by_task.values()) / n, 3) if n else None,
+        f"pass^{k}": round(sum(all(v) for v in by_task.values()) / n, 3) if n else None,
+    }
+
+
+def by_category(results: list[TaskResult]) -> dict[str, list[int]]:
+    """category -> [passed trials, trials]."""
+    out: dict[str, list[int]] = {}
+    for r in results:
+        row = out.setdefault(r.category, [0, 0])
+        row[0] += r.passed
+        row[1] += 1
+    return out
+
+
+def write_json_report(results: list[TaskResult], stamp: str | None = None) -> Path:
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    stamp = stamp or datetime.now().strftime("%Y%m%d-%H%M%S")
     path = REPORTS_DIR / f"{stamp}.json"
+    traced = [r.process for r in results if r.process]
     payload = {
         "timestamp": stamp,
         "summary": {
@@ -281,10 +365,15 @@ def write_json_report(results: list[TaskResult]) -> Path:
             "passed": sum(1 for r in results if r.passed),
             "total_cost_usd": sum(r.cost_usd for r in results),
             "total_tokens": sum(r.input_tokens + r.output_tokens for r in results),
+            **pass_stats(results),
+            "by_category": by_category(results),
+            "process": aggregate(traced) if traced else None,
         },
         "results": [
             {
                 "name": r.name,
+                "category": r.category,
+                "trial": r.trial,
                 "passed": r.passed,
                 "error": r.error,
                 "input_tokens": r.input_tokens,
@@ -296,6 +385,8 @@ def write_json_report(results: list[TaskResult]) -> Path:
                     {"description": c.description, "passed": c.passed, "detail": c.detail}
                     for c in r.checks
                 ],
+                "trajectory": r.trajectory,
+                "process": r.process,
             }
             for r in results
         ],
@@ -317,7 +408,41 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--verbose", action="store_true", help="Show live agent output per task.")
     p.add_argument("--keep-workspace", action="store_true", help="Keep temp workspaces for debugging.")
     p.add_argument("--no-json", action="store_true", help="Skip writing the JSON report.")
+    p.add_argument("--repeat", type=int, default=1,
+                   help="Run each task N times (pass@1 / pass@N / pass^N).")
+    p.add_argument("--no-trace", action="store_true",
+                   help="Do not record per-step trajectories.")
+    p.add_argument("--budget", type=float, default=None,
+                   help="Spend cap in USD (default: CODELET_EVAL_BUDGET_USD; 0 = none).")
     return p
+
+
+def _env_float(name: str) -> float | None:
+    raw = os.environ.get(name, "").strip()
+    try:
+        return float(raw) if raw else None
+    except ValueError:
+        return None
+
+
+def apply_eval_env(config: Any, args: argparse.Namespace) -> float | None:
+    """Fold the CODELET_EVAL_* settings into `config`; return the budget (None = no cap)."""
+    if not args.model and os.environ.get("CODELET_EVAL_MODEL", "").strip():
+        config.model = os.environ["CODELET_EVAL_MODEL"].strip()
+    p_in, p_out = _env_float("CODELET_EVAL_PRICE_INPUT"), _env_float("CODELET_EVAL_PRICE_OUTPUT")
+    if p_in is not None and p_out is not None:
+        config.pricing_overrides = {**(config.pricing_overrides or {}),
+                                    config.model: {"input": p_in, "output": p_out}}
+    budget = args.budget if args.budget is not None else _env_float("CODELET_EVAL_BUDGET_USD")
+    return budget if budget else None
+
+
+def _priced(config: Any) -> bool:
+    from codelet.telemetry import Telemetry
+
+    t = Telemetry()
+    t.update_pricing(config.pricing_overrides)
+    return config.model in t.pricing
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -326,6 +451,12 @@ def main(argv: list[str] | None = None) -> int:
 
     load_env_files()
     settings = load_settings()
+    # The agent's own `python` / `pytest` must be the interpreter the checks use
+    # (see _check_env); otherwise a task can pass under one Python and be graded
+    # under another.
+    os.environ["PATH"] = _check_env()["PATH"]
+    os.environ.setdefault("PYTHONUTF8", "1")
+    os.environ["PYTHONDONTWRITEBYTECODE"] = "1"      # same stale-.pyc trap as the checks
     # Reuse the CLI's config resolution; force AUTO + no streaming for headless runs.
     cfg_args = argparse.Namespace(
         profile=args.profile, provider=None, model=args.model, base_url=None,
@@ -334,6 +465,12 @@ def main(argv: list[str] | None = None) -> int:
     config = _build_config(cfg_args, settings)
     config.permission_mode = PermissionMode.AUTO
     config.stream = False
+    budget = apply_eval_env(config, args)
+    if budget is not None and not _priced(config):
+        console.print(f"[red]No price for model {config.model!r}:[/red] set "
+                      "CODELET_EVAL_PRICE_INPUT / CODELET_EVAL_PRICE_OUTPUT in .env (or "
+                      "`pricing` in settings.json), or pass --budget 0 to run uncapped.")
+        return 2
 
     if args.task:
         tasks = [load_task(Path(args.task))]
@@ -344,24 +481,53 @@ def main(argv: list[str] | None = None) -> int:
         console.print("[yellow]No tasks found.[/yellow]")
         return 1
 
-    console.print(f"[dim]Running {len(tasks)} task(s) with "
-                  f"{config.provider.value}/{config.model}[/dim]")
+    console.print(f"[dim]Running {len(tasks)} task(s) x {max(1, args.repeat)} with "
+                  f"{config.model} via {config.provider.value}"
+                  + (f", budget ${budget:.2f}" if budget else "") + "[/dim]")
 
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    trace_dir = None if args.no_trace else REPORTS_DIR / "traj" / stamp
     results: list[TaskResult] = []
-    for task in tasks:
-        console.print(f"\n[cyan]▶ {task.name}[/cyan] [dim]{task.description}[/dim]")
-        result = run_one(task, config, console=console,
-                         verbose=args.verbose, keep_workspace=args.keep_workspace)
-        mark = "[green]✓[/green]" if result.passed else "[red]✗[/red]"
-        console.print(f"  {mark} {sum(1 for c in result.checks if c.passed)}/"
-                      f"{len(result.checks)} checks  "
-                      f"[dim]{result.duration_s:.1f}s, {result.llm_calls} calls[/dim]")
-        results.append(result)
+    spent = 0.0
+    stopped = False
+    # Trial-major: every task once, then every task again. If the budget stops
+    # the run early, pass@1 still covers the whole suite instead of the first
+    # few tasks three times over.
+    for trial in range(1, max(1, args.repeat) + 1):
+        if stopped:
+            break
+        for task in tasks:
+            # Stop before a task that would likely cross the cap, not after:
+            # estimate the next one from the mean so far.
+            nxt = spent / len(results) if results else 0.0
+            if budget is not None and spent + nxt > budget:
+                console.print(f"[yellow]budget ${budget:.2f}: spent ${spent:.4f} + "
+                              f"~${nxt:.4f} next would cross it; stopping[/yellow]")
+                stopped = True
+                break
+            label = task.name if args.repeat <= 1 else f"{task.name} #{trial}"
+            console.print(f"\n[cyan]▶ {label}[/cyan] [dim]{task.description}[/dim]")
+            result = run_one(task, config, console=console,
+                             verbose=args.verbose, keep_workspace=args.keep_workspace,
+                             trace_dir=trace_dir, trial=trial)
+            mark = "[green]✓[/green]" if result.passed else "[red]✗[/red]"
+            console.print(f"  {mark} {sum(1 for c in result.checks if c.passed)}/"
+                          f"{len(result.checks)} checks  "
+                          f"[dim]{result.duration_s:.1f}s, {result.llm_calls} calls[/dim]")
+            results.append(result)
+            spent += result.cost_usd or 0.0
 
     render_report(console, results)
+    stats = pass_stats(results)
+    if stats["trials_per_task"] > 1:
+        k = stats["trials_per_task"]
+        console.print(f"pass@1 {stats['pass@1']}  pass@{k} {stats[f'pass@{k}']}  "
+                      f"pass^{k} {stats[f'pass^{k}']}")
     if not args.no_json:
-        path = write_json_report(results)
+        path = write_json_report(results, stamp)
         console.print(f"[dim]report: {path}[/dim]")
+        if trace_dir is not None:
+            console.print(f"[dim]trajectories: {trace_dir}[/dim]")
 
     n_pass = sum(1 for r in results if r.passed)
     return 0 if n_pass == len(results) else 1

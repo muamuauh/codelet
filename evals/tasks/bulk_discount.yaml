@@ -1,0 +1,51 @@
+name: bulk_discount
+category: multi_file
+description: Add a rule in one module and use it from another.
+prompt: |
+  加一个批量折扣：同一种商品买 10 件及以上，这一行打 9 折。折扣规则写在 pricing.py 的 discount_rate(qty) 里，checkout.total 要用它。测试见 test_checkout.py。
+files:
+  pricing.py: |
+    PRICES = {"apple": 1.0, "pear": 2.0}
+
+
+    def unit_price(sku):
+        return PRICES[sku]
+  checkout.py: |
+    from pricing import unit_price
+
+
+    def total(cart):
+        return round(sum(unit_price(sku) * qty for sku, qty in cart.items()), 2)
+  test_checkout.py: |
+    from checkout import total
+    from pricing import discount_rate
+
+
+    def test_no_discount_below_threshold():
+        assert total({"apple": 3}) == 3.0
+
+
+    def test_bulk_discount():
+        assert discount_rate(10) == 0.1
+        assert discount_rate(9) == 0.0
+        assert total({"apple": 10, "pear": 1}) == 11.0
+checks:
+  - cmd: python -m pytest -q
+solution:
+  pricing.py: |
+    PRICES = {"apple": 1.0, "pear": 2.0}
+
+
+    def unit_price(sku):
+        return PRICES[sku]
+
+
+    def discount_rate(qty):
+        return 0.1 if qty >= 10 else 0.0
+  checkout.py: |
+    from pricing import discount_rate, unit_price
+
+
+    def total(cart):
+        return round(sum(unit_price(sku) * qty * (1 - discount_rate(qty))
+                         for sku, qty in cart.items()), 2)

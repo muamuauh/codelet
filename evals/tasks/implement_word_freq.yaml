@@ -1,0 +1,31 @@
+name: implement_word_freq
+category: feature
+description: Implement top-k word counting with a tie-break rule.
+prompt: |
+  实现 textstats.py 的 top_words(text, k)：忽略大小写，只把连续的英文字母当作单词，返回出现次数最多的 k 个 (单词, 次数)；次数相同按字母序。测试见 test_textstats.py。
+files:
+  textstats.py: |
+    def top_words(text, k):
+        raise NotImplementedError
+  test_textstats.py: |
+    from textstats import top_words
+
+
+    def test_counts_and_ties():
+        assert top_words("The cat and the hat. THE end!", 2) == [("the", 3), ("and", 1)]
+        assert top_words("b a b a c", 5) == [("a", 2), ("b", 2), ("c", 1)]
+
+
+    def test_empty():
+        assert top_words("", 3) == []
+checks:
+  - cmd: python -m pytest -q
+solution:
+  textstats.py: |
+    import re
+    from collections import Counter
+
+
+    def top_words(text, k):
+        counts = Counter(re.findall(r"[a-z]+", text.lower()))
+        return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:k]

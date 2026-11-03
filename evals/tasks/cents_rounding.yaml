@@ -1,0 +1,84 @@
+name: cents_rounding
+category: hard
+description: "Off-by-one-cent invoices: find the root cause three modules down."
+prompt: |
+  issue #301：发票总额偶尔少 1 分钱
+
+  买 1 件 19.99 的商品，发票上显示 $19.98。不是每个价格都会出现，换成 10.00 就正常。
+  请找到根本原因并修复，不要只修显示。
+files:
+  shop/__init__.py: |
+    # shop package
+  shop/money.py: |
+    def to_cents(amount):
+        """Dollars (float or str) -> integer cents."""
+        return int(float(amount) * 100)
+  shop/display.py: |
+    def fmt(cents):
+        """Integer cents -> '$1,234.50'."""
+        sign = "-" if cents < 0 else ""
+        dollars, rest = divmod(abs(cents), 100)
+        return f"{sign}${dollars:,}.{rest:02d}"
+  shop/cart.py: |
+    from shop.money import to_cents
+
+
+    def line_total(price, qty):
+        return to_cents(price) * qty
+
+
+    def cart_total(lines):
+        return sum(line_total(price, qty) for price, qty in lines)
+  shop/invoice.py: |
+    from shop.cart import cart_total
+    from shop.display import fmt
+
+
+    def invoice(lines):
+        return f"TOTAL {fmt(cart_total(lines))}"
+  test_display.py: |
+    from shop.display import fmt
+
+
+    def test_fmt():
+        assert fmt(123450) == "$1,234.50"
+        assert fmt(-5) == "-$0.05"
+hidden_files:
+  test_money_hidden.py: |
+    import pytest
+
+    from shop.display import fmt
+    from shop.invoice import invoice
+    from shop.money import to_cents
+
+
+    @pytest.mark.parametrize("amount,cents", [
+        ("19.99", 1999), (19.99, 1999), (0.1 + 0.2, 30), ("2.675", 268), (10, 1000),
+        ("0.005", 1), (1.15, 115),
+    ])
+    def test_to_cents(amount, cents):
+        assert to_cents(amount) == cents
+
+
+    def test_invoice():
+        assert invoice([(19.99, 1)]) == "TOTAL $19.99"
+        assert invoice([(19.99, 3), (0.1, 3)]) == "TOTAL $60.27"
+
+
+    def test_display_unchanged():
+        assert fmt(123450) == "$1,234.50"
+        assert fmt(199) == "$1.99"
+checks:
+  - cmd: python -m pytest -q
+solution:
+  shop/money.py: |
+    from decimal import ROUND_HALF_UP, Decimal
+
+
+    def to_cents(amount):
+        """Dollars (float or str) -> integer cents, rounded half up.
+
+        str() first: Decimal(19.99) is 19.989999..., Decimal("19.99") is exact.
+        """
+        cents = Decimal(str(amount)) * 100
+        return int(cents.quantize(Decimal("1"), rounding=ROUND_HALF_UP))

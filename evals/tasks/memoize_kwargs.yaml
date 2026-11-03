@@ -1,0 +1,127 @@
+name: memoize_kwargs
+category: hard
+description: "Fix a memoize decorator: kwargs in the key, unhashable args, keep None cached."
+prompt: |
+  issue #45：@memoize 的两个问题
+
+  1. `price("a", currency="EUR")` 之后再调 `price("a")`，返回的是 EUR 的结果。
+  2. 参数里有 list 时直接抛 `TypeError: unhashable type`。这种情况希望直接调用原函数，不缓存。
+
+  已有的行为（缓存命中时不再调用原函数、保留函数名和 docstring、`wrapper.cache` 可访问）都要保留。
+files:
+  memo.py: |
+    import functools
+
+
+    def memoize(fn):
+        cache = {}
+
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            if args in cache:
+                return cache[args]
+            result = fn(*args, **kwargs)
+            cache[args] = result
+            return result
+
+        wrapper.cache = cache
+        return wrapper
+  test_memo.py: |
+    from memo import memoize
+
+
+    def test_caches():
+        calls = []
+
+        @memoize
+        def sq(x):
+            calls.append(x)
+            return x * x
+
+        assert sq(3) == 9 and sq(3) == 9
+        assert calls == [3]
+hidden_files:
+  test_memo_hidden.py: |
+    from memo import memoize
+
+
+    def counted():
+        calls = []
+
+        @memoize
+        def price(sku, currency="USD", **extra):
+            """Look up a price."""
+            calls.append((sku, currency, tuple(sorted(extra.items()))))
+            return f"{sku}-{currency}"
+
+        return price, calls
+
+
+    def test_kwargs_are_part_of_the_key():
+        price, _ = counted()
+        assert price("a", currency="EUR") == "a-EUR"
+        assert price("a") == "a-USD"
+
+
+    def test_kwarg_order_does_not_matter():
+        price, calls = counted()
+        price("a", x=1, y=2)
+        price("a", y=2, x=1)
+        assert len(calls) == 1
+
+
+    def test_unhashable_arguments_bypass_the_cache():
+        calls = []
+
+        @memoize
+        def total(xs):
+            calls.append(1)
+            return sum(xs)
+
+        assert total([1, 2]) == 3 and total([1, 2]) == 3
+        assert len(calls) == 2
+
+
+    def test_none_results_are_cached_too():
+        calls = []
+
+        @memoize
+        def nothing(x):
+            calls.append(x)
+            return None
+
+        nothing(1)
+        nothing(1)
+        assert calls == [1]
+
+
+    def test_wrapper_metadata_and_cache_attribute():
+        price, _ = counted()
+        price("a")
+        assert price.__name__ == "price" and price.__doc__ == "Look up a price."
+        assert len(price.cache) == 1
+checks:
+  - cmd: python -m pytest -q
+solution:
+  memo.py: |
+    import functools
+
+
+    def memoize(fn):
+        cache = {}
+
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            key = (args, tuple(sorted(kwargs.items())))
+            try:
+                hash(key)
+            except TypeError:
+                return fn(*args, **kwargs)      # unhashable: call through, don't cache
+            if key in cache:
+                return cache[key]
+            result = fn(*args, **kwargs)
+            cache[key] = result
+            return result
+
+        wrapper.cache = cache
+        return wrapper

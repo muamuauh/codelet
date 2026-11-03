@@ -1,0 +1,131 @@
+name: lazy_slice
+category: hard
+description: "Make a lazy sequence slice exactly like list (hidden edge-case tests)."
+prompt: |
+  issue #212：LazySeq 的切片和 list 不一致
+
+  `seq[-2:]` 返回了全部元素，`seq[::2]` 的步长被忽略了，`seq[5:1:-1]` 返回空列表。
+  请让 LazySeq 的切片和整数下标与「对同样元素建一个 list 再取」的结果完全一致
+  （负数下标、步长、越界、步长为 0 都一样）。LazySeq 必须保持按需产生元素：
+  取前几个元素时不能把整个序列都生成一遍。
+files:
+  lazyseq.py: |
+    class LazySeq:
+        """A read-only view over an iterator factory; items are produced on demand."""
+
+        def __init__(self, factory, length):
+            self._factory = factory   # factory() -> a fresh iterator over the items
+            self._len = length
+
+        def __len__(self):
+            return self._len
+
+        def __getitem__(self, key):
+            if isinstance(key, slice):
+                start = key.start or 0
+                stop = key.stop if key.stop is not None else self._len
+                out = []
+                for i, item in enumerate(self._factory()):
+                    if i >= stop:
+                        break
+                    if i >= start:
+                        out.append(item)
+                return out
+            if key < 0:
+                key += self._len
+            for i, item in enumerate(self._factory()):
+                if i == key:
+                    return item
+            raise IndexError(key)
+  test_lazyseq.py: |
+    from lazyseq import LazySeq
+
+
+    def make(n):
+        return LazySeq(lambda: iter(range(n)), n)
+
+
+    def test_basic():
+        s = make(5)
+        assert len(s) == 5
+        assert s[0] == 0 and s[4] == 4
+        assert s[1:3] == [1, 2]
+hidden_files:
+  test_lazyseq_hidden.py: |
+    import itertools
+
+    import pytest
+
+    from lazyseq import LazySeq
+
+
+    def make(n, counter=None):
+        def factory():
+            for i in range(n):
+                if counter is not None:
+                    counter.append(i)
+                yield i * 10
+        return LazySeq(factory, n)
+
+
+    VALUES = [None, -7, -3, -1, 0, 1, 2, 4, 9]
+    STEPS = [None, 1, 2, 3, -1, -2]
+
+
+    @pytest.mark.parametrize("start,stop,step", list(itertools.product(VALUES, VALUES, STEPS)))
+    def test_slices_match_list(start, stop, step):
+        ref = [i * 10 for i in range(6)]
+        assert make(6)[start:stop:step] == ref[start:stop:step]
+
+
+    @pytest.mark.parametrize("i", [-6, -1, 0, 5])
+    def test_index_matches_list(i):
+        assert make(6)[i] == [i * 10 for i in range(6)][i]
+
+
+    @pytest.mark.parametrize("i", [6, 100, -7])
+    def test_out_of_range_index(i):
+        with pytest.raises(IndexError):
+            make(6)[i]
+
+
+    def test_zero_step():
+        with pytest.raises(ValueError):
+            make(6)[::0]
+
+
+    def test_still_lazy():
+        seen = []
+        s = make(1000, seen)
+        assert s[:3] == [0, 10, 20]
+        assert len(seen) <= 4
+checks:
+  - cmd: python -m pytest -q
+solution:
+  lazyseq.py: |
+    class LazySeq:
+        """A read-only view over an iterator factory; items are produced on demand."""
+
+        def __init__(self, factory, length):
+            self._factory = factory   # factory() -> a fresh iterator over the items
+            self._len = length
+
+        def __len__(self):
+            return self._len
+
+        def _fetch(self, indices):
+            need = set(indices)
+            got = {}
+            if need:
+                for i, item in enumerate(self._factory()):
+                    if i in need:
+                        got[i] = item
+                        if len(got) == len(need):
+                            break
+            return [got[i] for i in indices]
+
+        def __getitem__(self, key):
+            if isinstance(key, slice):
+                return self._fetch(list(range(self._len)[key]))
+            index = range(self._len)[key]          # IndexError / TypeError like list
+            return self._fetch([index])[0]

@@ -63,6 +63,28 @@ the patch must pass) rather than asserting on the agent's prose — that's what
 makes the score objective. Put any test files the checks rely on under `files:`
 so the agent can read them but the workspace stays self-contained.
 
+## Trajectories, process metrics, pass@k
+
+Every task run records a per-step trajectory (`codelet/trajectory.py`) to
+`evals/reports/traj/<stamp>/<task>[#trial].jsonl`, and the JSON report carries
+process metrics read off it (`evals/trajectory_metrics.py`): read-before-edit,
+verified-after-edit, repeated identical calls, gate blocks by kind, parallel
+share, steps after the last edit. `--repeat k` runs the suite k times
+(trial-major) and reports pass@1 / pass@k / pass^k. See
+[docs/evaluation.md](../docs/evaluation.md) for definitions and results.
+
+Tasks may carry `category:` and a reference `solution:` (files overlaid on the
+start state, never shown to the agent). `tests/test_eval_tasks.py` proves each
+task valid: checks fail on the start files and pass with the solution;
+`solution: {}` means "change nothing" (clarify tasks). `hidden_files:` are
+written only after the agent stops, right before the checks (SWE-bench's
+FAIL_TO_PASS / PASS_TO_PASS) -- the `hard` tasks use them with issue-style
+prompts.
+
+Model, prices and a spend cap can come from `.env`: `CODELET_EVAL_MODEL`,
+`CODELET_EVAL_PRICE_INPUT` / `_OUTPUT` (USD per Mtok), `CODELET_EVAL_BUDGET_USD`.
+With a budget and no price the runner refuses to start.
+
 ## What this is / isn't
 
 This is a fast local feedback loop to catch regressions in *your* agent (edit

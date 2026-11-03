@@ -1,0 +1,67 @@
+name: implement_lru
+category: feature
+description: Implement an LRU cache from tests.
+prompt: |
+  实现 lru.py 里的 LRUCache，让 test_lru.py 全部通过。
+files:
+  lru.py: |
+    class LRUCache:
+        """Fixed-capacity cache; evicts the least recently used key. get() returns -1 on a miss."""
+
+        def __init__(self, capacity):
+            raise NotImplementedError
+
+        def get(self, key):
+            raise NotImplementedError
+
+        def put(self, key, value):
+            raise NotImplementedError
+  test_lru.py: |
+    from lru import LRUCache
+
+
+    def test_basic_eviction():
+        c = LRUCache(2)
+        c.put(1, "a")
+        c.put(2, "b")
+        assert c.get(1) == "a"      # 1 is now most recent
+        c.put(3, "c")               # evicts 2
+        assert c.get(2) == -1
+        assert c.get(3) == "c"
+
+
+    def test_update_refreshes():
+        c = LRUCache(2)
+        c.put(1, "a")
+        c.put(2, "b")
+        c.put(1, "z")               # update, 1 most recent
+        c.put(3, "c")               # evicts 2
+        assert c.get(1) == "z"
+        assert c.get(2) == -1
+checks:
+  - cmd: python -m pytest -q
+  - file: lru.py
+    not_contains: NotImplementedError
+solution:
+  lru.py: |
+    from collections import OrderedDict
+
+
+    class LRUCache:
+        """Fixed-capacity cache; evicts the least recently used key. get() returns -1 on a miss."""
+
+        def __init__(self, capacity):
+            self.capacity = capacity
+            self.data = OrderedDict()
+
+        def get(self, key):
+            if key not in self.data:
+                return -1
+            self.data.move_to_end(key)
+            return self.data[key]
+
+        def put(self, key, value):
+            self.data[key] = value
+            self.data.move_to_end(key)
+            if len(self.data) > self.capacity:
+                self.data.popitem(last=False)

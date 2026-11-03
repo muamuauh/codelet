@@ -1,4 +1,5 @@
 name: implement_slugify
+category: feature
 description: Implement a function from its spec + tests (agent must read the tests).
 prompt: |
   实现 strutil.py 里的 slugify 函数，让 test_strutil.py 全部通过。
@@ -21,3 +22,12 @@ checks:
   - cmd: python -m pytest -q
   - file: strutil.py
     not_contains: "NotImplementedError"
+solution:
+  strutil.py: |
+    import re
+
+
+    def slugify(text):
+        """Turn text into a URL slug. See test_strutil.py for exact behavior."""
+        text = re.sub(r"[^a-z0-9\s-]", "", text.lower())
+        return re.sub(r"[\s-]+", "-", text).strip("-")
