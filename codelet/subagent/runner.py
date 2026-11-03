@@ -199,6 +199,10 @@ class SubAgentSession:
         # the copied registry).
         if self._parent_loop is not None:
             child.inherit_plugins_from(self._parent_loop)
+            parent_trace = getattr(self._parent_loop, "trajectory", None)
+            if parent_trace is not None:
+                child.trajectory = parent_trace.child(
+                    f"sub{self._parent_depth + 1}:{spec.agent_type}")
 
         child.context = ConversationContext(config=child_config)
         child.context.depth = self._parent_depth + 1

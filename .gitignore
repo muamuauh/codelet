@@ -24,6 +24,9 @@ dist/
 # default; remove this line to share a project's memory through the repo).
 .codelet/memory/
 
+# --trace: per-step trajectories hold prompts and tool outputs from your sessions.
+.codelet/traces/
+
 # Eval run reports
 evals/reports/
 evals/swebench/out/

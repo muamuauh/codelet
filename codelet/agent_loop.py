@@ -48,6 +48,7 @@ from .tools.base import ToolRegistry, ToolResult
 from .tools.skill_tool import SkillTool
 from .tools.task_tool import TaskTool
 from .tools.todo_write import TodoStore, TodoWriteTool
+from .trajectory import OUTPUT_CAP, TEXT_CAP, Trajectory, clip
 
 # Tools that should pop a diff preview + y/n confirm in ASK mode. `create_tool`
 # (self-evolution) previews the *generated tool source* so the user vets any
@@ -135,9 +136,14 @@ class AgentLoop:
         hook_runner: HookRunner | None = None,
         telemetry: Telemetry | None = None,
         confirm_callback: "ConfirmCallback | None" = None,
+        trajectory: Trajectory | None = None,
         _is_subagent: bool = False,
     ) -> None:
         self.config = config or Config()
+        # Per-step record (evals, `--trace`). None = off; every call site is a
+        # no-op then. Subagents get a child view from the SubAgent runner.
+        self.trajectory: Trajectory | None = trajectory
+        self._last_cost: float | None = None
         self.registry = registry or ToolRegistry.default()
         self.permission_gate = PermissionGate(self.config)
         self.context = ConversationContext(config=self.config)
@@ -259,6 +265,9 @@ class AgentLoop:
                               + (" (read-only)" if self._turn.read_only else ""), level="dim")
             if self._turn.note:
                 user_message = f"{user_message}\n\n<turn_note>{self._turn.note}</turn_note>"
+        self._trace("user_turn", prompt=clip(user_message, TEXT_CAP),
+                    turn=self._turn.label if self._turn else None,
+                    read_only=bool(self._turn and self._turn.read_only))
 
         if images:
             content: list[dict[str, Any]] = []
@@ -269,9 +278,26 @@ class AgentLoop:
         else:
             self.context.add_user_message(user_message)
         final_text = ""
+        llm_calls = 0
+        max_turns_hit = False
 
         for _turn in range(self.config.max_turns):
-            response, streamed = await self._call_llm()
+            if self.trajectory is not None:
+                self.trajectory.next_step()
+            started = Trajectory.now_ms()
+            try:
+                response, streamed = await self._call_llm()
+            except Exception as exc:
+                self._trace("error", where="llm_call", error=f"{type(exc).__name__}: {exc}"[:2000])
+                raise
+            llm_calls += 1
+            self._trace("llm_call",
+                        latency_ms=round(Trajectory.now_ms() - started, 1),
+                        stop_reason=response.stop_reason,
+                        usage=dict(response.usage or {}),
+                        cost_usd=self._last_cost,
+                        text=clip("\n".join(response.text_blocks), TEXT_CAP),
+                        tool_calls=[{"id": c.id, "name": c.name} for c in response.tool_calls])
             self._render_response(response, streamed)
 
             if response.text_blocks:
@@ -296,13 +322,19 @@ class AgentLoop:
                     self._sink.notice(
                         f"context compacted: {ctx.cleared_results - before[0]} old tool outputs "
                         f"cleared, {ctx.compactions - before[1]} summary", level="dim")
+                    self._trace("compaction", cleared=ctx.cleared_results - before[0],
+                                summaries=ctx.compactions - before[1])
             except Exception as exc:
                 # A failing summarizer must NOT kill the agent. Log and move on.
                 self._sink.notice(f"compaction skipped: {exc}", level="dim")
+                self._trace("error", where="compaction", error=str(exc)[:2000])
         else:
+            max_turns_hit = True
             if not final_text:
                 final_text = "(max turns reached without a final response)"
 
+        self._trace("turn_end", final_chars=len(final_text), llm_calls=llm_calls,
+                    max_turns_hit=max_turns_hit)
         return final_text
 
     # ---------- internals ----------
@@ -519,9 +551,15 @@ class AgentLoop:
             on_text=on_text,
         )
 
+    def _trace(self, kind: str, **fields: Any) -> None:
+        if self.trajectory is not None:
+            self.trajectory.record(kind, **fields)
+
     def _record_usage(self, response: LLMResponse) -> None:
+        self._last_cost = None
         if response.usage:
-            self.telemetry.record_chat(self.config.model, response.usage)
+            row = self.telemetry.record_chat(self.config.model, response.usage)
+            self._last_cost = row.cost_usd
             # Runs before the reply is appended: the count covers what was sent.
             self.context.note_usage(response.usage)
 
@@ -581,9 +619,9 @@ class AgentLoop:
 
         # Single-call shortcut: no need to spin up gather machinery.
         if len(tool_calls) == 1:
-            return [await self._dispatch_one(tool_calls[0])]
+            return [await self._dispatch_one(tool_calls[0], batch=1)]
 
-        coros = [self._dispatch_one(call) for call in tool_calls]
+        coros = [self._dispatch_one(call, batch=len(tool_calls)) for call in tool_calls]
         # return_exceptions=True isolates sibling failures: one tool blowing up
         # never cancels the others. Each exception is converted to a tool_result.
         completed = await asyncio.gather(*coros, return_exceptions=True)
@@ -598,12 +636,30 @@ class AgentLoop:
         # Order-preservation: walk tool_calls again, not `completed`.
         return [by_id[call.id] for call in tool_calls]
 
-    async def _dispatch_one(self, call: ToolCall) -> dict[str, Any]:
+    async def _dispatch_one(self, call: ToolCall, batch: int = 1) -> dict[str, Any]:
+        started = Trajectory.now_ms()
+        result, outcome, raw = await self._dispatch_gated(call)
+        if self.trajectory is not None:
+            self._trace("tool_call", tool_use_id=call.id, name=call.name,
+                        input=self.trajectory.tool_input(dict(call.input or {})),
+                        outcome=outcome, is_error=bool(result.get("is_error")),
+                        output=clip(raw, OUTPUT_CAP), output_chars=len(raw),
+                        latency_ms=round(Trajectory.now_ms() - started, 1), batch=batch)
+        return result
+
+    async def _dispatch_gated(self, call: ToolCall) -> tuple[dict[str, Any], str, str]:
+        """Run one tool_use through every gate. Returns (tool_result, outcome, raw output).
+
+        `outcome` names which gate stopped it, if one did -- the trajectory
+        keeps "not allowed" apart from "tool failed".
+        """
         tool = self.registry.get(call.name)
         if tool is None:
-            return self._error_result(call.id, f"Unknown tool '{call.name}'")
+            msg = f"Unknown tool '{call.name}'"
+            return self._error_result(call.id, msg), "unknown_tool", msg
         if call.name in self._disabled_tools:
-            return self._error_result(call.id, f"Tool '{call.name}' is disabled.")
+            msg = f"Tool '{call.name}' is disabled."
+            return self._error_result(call.id, msg), "disabled", msg
 
         # PreToolUse hooks: may rewrite tool input or block execution.
         tool_input: dict[str, Any] = dict(call.input or {})
@@ -616,21 +672,22 @@ class AgentLoop:
             if outcome.blocked:
                 msg = outcome.block_reason or "PreToolUse hook blocked execution"
                 self._sink.notice(f"[hook block] {msg}", level="error")
-                return self._error_result(call.id, f"PreToolUse blocked: {msg}")
+                msg = f"PreToolUse blocked: {msg}"
+                return self._error_result(call.id, msg), "hook_blocked", msg
             if "tool_input" in outcome.overrides and isinstance(outcome.overrides["tool_input"], dict):
                 tool_input = outcome.overrides["tool_input"]
 
         denial = self.permission_gate.check(tool, tool_input)
         if denial is not None:
             self._sink.notice(denial.output, level="error")
-            return self._error_result(call.id, denial.output)
+            return self._error_result(call.id, denial.output), "permission_denied", denial.output
 
         if self._turn is not None and self._turn.read_only and not tool.is_read_only(tool_input):
             msg = (f"Blocked: this turn was routed as '{self._turn.label}', so tools that change "
                    "files are off. Tell the user what you would change and ask them to confirm; "
                    "their reply turns changes back on.")
             self._sink.notice(msg, level="warn")
-            return self._error_result(call.id, msg)
+            return self._error_result(call.id, msg), "readonly_blocked", msg
 
         # Diff preview + confirmation for destructive writes in ASK mode. The
         # callback is None for subagents and for tests that explicitly opt out.
@@ -647,7 +704,8 @@ class AgentLoop:
                     decision = await decision
                 if not decision:
                     self._sink.notice("rejected by user", level="warn")
-                    return self._error_result(call.id, "User rejected the proposed change.")
+                    msg = "User rejected the proposed change."
+                    return self._error_result(call.id, msg), "user_rejected", msg
 
         try:
             result: ToolResult = await self._exec_with_middleware(call.name, tool, tool_input)
@@ -671,7 +729,7 @@ class AgentLoop:
             "tool_use_id": call.id,
             "content": self._cap_output(call.id, result.output),  # hooks saw it uncapped
             "is_error": result.is_error,
-        }
+        }, ("error" if result.is_error else "ok"), result.output
 
     @staticmethod
     def _error_result(tool_use_id: str, message: str) -> dict[str, Any]:

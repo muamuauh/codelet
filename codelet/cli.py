@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,7 @@ from .persistence.session import (
 from .settings import load_env_files, load_settings, resolve_profile
 from .slash.loader import SlashCommandIndex, expand_command, load_commands
 from .tools.base import ToolRegistry
+from .trajectory import Trajectory
 
 BANNER = """[bold cyan]codelet[/bold cyan] [dim]v0.1.0 (P5)[/dim]
 Enhanced fork: subagent + parallel + skill + hooks + telemetry + multi-provider.
@@ -66,6 +68,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Do not auto-save the session after each turn.")
     p.add_argument("--resume", default=None,
                    help="Resume a saved session by id (run /sessions to list).")
+    p.add_argument("--trace", action="store_true",
+                   help="Record a per-step trajectory to .codelet/traces/<time>.jsonl.")
     p.add_argument("prompt", nargs="?", default=None, help="One-shot prompt (else interactive).")
     return p
 
@@ -409,7 +413,15 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         registry = ToolRegistry.default()
-        agent = AgentLoop(config=config, registry=registry, console=console)
+        trajectory = None
+        if args.trace:
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            trajectory = Trajectory(Path.cwd() / ".codelet" / "traces" / f"{stamp}.jsonl",
+                                    meta={"provider": config.provider.value,
+                                          "model": config.model, "source": "cli"})
+            console.print(f"[dim]trace: {trajectory.path}[/dim]")
+        agent = AgentLoop(config=config, registry=registry, console=console,
+                          trajectory=trajectory)
     except NotImplementedError as exc:
         console.print(f"[red]Provider not implemented yet:[/red] {exc}")
         return 2
