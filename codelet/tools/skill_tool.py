@@ -54,5 +54,9 @@ class SkillTool(Tool):
                 output=f"Skill '{name}' not found. Available: {available}",
                 is_error=True,
             )
-        # Body returned verbatim. The model will read this in the next turn.
+        # Body returned verbatim; for directory-bundled SKILL.md, include its
+        # directory path so the agent can read companion scripts/references.
+        if skill.source is not None and skill.source.name.lower() == "skill.md":
+            header = f"[Skill directory: {skill.source.parent}]\n\n"
+            return ToolResult(output=header + skill.body)
         return ToolResult(output=skill.body)

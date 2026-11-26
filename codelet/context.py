@@ -162,6 +162,122 @@ class ConversationContext:
         return approx_tokens(self._system_prompt) + sum(
             approx_tokens(_render_message(m)) for m in self.messages)
 
+    def breakdown(self, tool_schemas: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+        """Five-segment context window breakdown aligned to `estimate_tokens()`.
+
+        Segments: system / tools (tool schemas + tool_result payloads) /
+        assistant (text + tool_use) / user (user prose) / free.
+        """
+        import json as _json
+
+        raw_sys = approx_tokens(self._system_prompt) if self._system_prompt else 0
+        raw_tools = approx_tokens(_json.dumps(tool_schemas)) if tool_schemas else 0
+        raw_asst = 0
+        raw_user = 0
+
+        for m in self.messages:
+            role = m.get("role", "")
+            content = m.get("content", "")
+            if isinstance(content, str):
+                tok = approx_tokens(content)
+                if role == "assistant":
+                    raw_asst += tok
+                else:
+                    raw_user += tok
+            elif isinstance(content, list):
+                for b in content:
+                    if not isinstance(b, dict):
+                        continue
+                    btype = b.get("type")
+                    if btype == "tool_result":
+                        inner = b.get("content")
+                        if isinstance(inner, list):
+                            inner = " ".join(x.get("text", "") for x in inner if isinstance(x, dict))
+                        raw_tools += approx_tokens(str(inner or ""))
+                    elif btype == "tool_use":
+                        raw_asst += approx_tokens(f"{b.get('name', '')} {b.get('input', '')}")
+                    elif btype == "text":
+                        tok = approx_tokens(str(b.get("text", "")))
+                        if role == "assistant":
+                            raw_asst += tok
+                        else:
+                            raw_user += tok
+
+        used = self.estimate_tokens()
+        raw_sum = raw_sys + raw_tools + raw_asst + raw_user
+        if raw_sum > 0 and used > 0:
+            scale = used / raw_sum
+            s_tok = int(round(raw_sys * scale))
+            t_tok = int(round(raw_tools * scale))
+            a_tok = int(round(raw_asst * scale))
+            u_tok = max(0, used - s_tok - t_tok - a_tok)
+        else:
+            s_tok, t_tok, a_tok, u_tok = raw_sys, raw_tools, raw_asst, raw_user
+
+        limit = max(1, int(self.config.context_window or 200_000))
+        free = max(0, limit - used)
+        pct = round(min(100.0, (used / limit) * 100.0), 1)
+        return {
+            "used": used,
+            "limit": limit,
+            "free": free,
+            "pct": pct,
+            "anchored": self._anchor is not None,
+            "messages": len(self.messages),
+            "compactions": self.compactions,
+            "cleared_results": self.cleared_results,
+            "segments": {
+                "system": s_tok,
+                "tools": t_tok,
+                "assistant": a_tok,
+                "user": u_tok,
+                "free": free,
+            },
+        }
+
+    async def force_compact(
+        self,
+        client: "LLMClient",
+        *,
+        pinned: str = "",
+        focus: str = "",
+    ) -> dict[str, Any]:
+        """Manual compaction triggered by `/compact` or the Cockpit button."""
+        before_tokens = self.estimate_tokens()
+        before_msgs = len(self.messages)
+        cleared = self._clear_old_tool_results(self._tail_start())
+        self.cleared_results += cleared
+
+        keep_recent = max(2, self.config.compact_keep_recent)
+        summarized = False
+        if len(self.messages) > keep_recent + 1:
+            tail_start = self._tail_start()
+            head = self.messages[:1]
+            middle = self.messages[1:tail_start]
+            tail = self.messages[tail_start:]
+            if middle:
+                previous = "\n\n".join(_summary_body(m) for m in middle if _is_summary(m))
+                events = [m for m in middle if not _is_summary(m)]
+                summary_text = await _summarize(client, events, self.config, previous=previous, focus=focus)
+                content = f"{SUMMARY_OPEN}\n{summary_text}\n{SUMMARY_CLOSE}"
+                if pinned:
+                    content += f"\n\n<current_state>\n{pinned}\n</current_state>"
+                self.messages = head + [{"role": "user", "content": content}] + tail
+                self.compactions += 1
+                self._anchor = None
+                summarized = True
+
+        after_tokens = self.estimate_tokens()
+        return {
+            "compacted": bool(cleared or summarized),
+            "cleared": cleared,
+            "summarized": summarized,
+            "before_tokens": before_tokens,
+            "after_tokens": after_tokens,
+            "before_messages": before_msgs,
+            "after_messages": len(self.messages),
+        }
+
     def should_compact(self) -> bool:
         """Would L2 (summary) fire now."""
         ratio = self.config.compact_threshold_ratio
@@ -336,7 +452,7 @@ _MERGE = ("An earlier summary of even older history comes first. Merge it with t
 
 
 async def _summarize(client: "LLMClient", middle: list[dict[str, Any]], config: Config,
-                     previous: str = "") -> str:
+                     previous: str = "", focus: str = "") -> str:
     """L2: structured, rolling summary of the middle slice.
 
     Uses `config.compact_model` (a cheap model by default; per profile, see
@@ -345,7 +461,8 @@ async def _summarize(client: "LLMClient", middle: list[dict[str, Any]], config: 
     import asyncio
 
     events = "\n\n".join(_render_message(m) for m in middle)
-    prompt = (f"{_MERGE}<previous_summary>\n{previous}\n</previous_summary>\n\n" if previous else "") \
+    focus_note = f"<user_focus>\nPay extra attention to preserving: {focus.strip()}\n</user_focus>\n\n" if focus and focus.strip() else ""
+    prompt = focus_note + (f"{_MERGE}<previous_summary>\n{previous}\n</previous_summary>\n\n" if previous else "") \
         + f"<events>\n{events}\n</events>"
     response = await asyncio.to_thread(
         client.chat,

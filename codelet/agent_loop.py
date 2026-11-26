@@ -40,7 +40,7 @@ from .llm.base import LLMClient, LLMResponse, ToolCall
 from .llm.factory import build_client
 from .permissions import PermissionGate
 from .plugins.base import TurnPolicy
-from .plugins.loader import apply_plugins
+from .plugins.loader import AppliedPlugins, apply_plugins, list_available_plugins
 from .skills.loader import SkillIndex, load_skills
 from .system_prompt import build_system_prompt
 from .telemetry import Telemetry
@@ -109,6 +109,12 @@ class RichSink:
     def thinking(self) -> Iterator[Status]:
         with self.console.status("[dim]…[/dim]", spinner="dots") as status:
             yield status
+
+    def reasoning_delta(self, text: str) -> None:
+        pass
+
+    def todos_updated(self, todos: list[dict[str, Any]]) -> None:
+        pass
 
 # Playful status words shown while waiting for the first streamed token.
 _SPINNER_WORDS = (
@@ -210,6 +216,11 @@ class AgentLoop:
         self._tool_middleware: list[Callable[..., Any]] = []
         self._plugin_commands: dict[str, Callable[[str], str]] = {}
         self._turn_policies: list[Callable[..., Any]] = []
+        self._applied_plugins: AppliedPlugins = AppliedPlugins()
+        self._tool_origins: dict[str, str] = {}
+        self._skill_origins: dict[str, str] = {}
+        self._tool_call_counts: dict[str, int] = {}
+        self._cockpit: Any = None
         self._turn: TurnPolicy | None = None     # policy of the turn in progress
         # Runtime tool/skill toggles (GUI hot-plug). Disabled tools are hidden
         # from the model and refused if called; disabled skills drop out of the
@@ -362,6 +373,9 @@ class AgentLoop:
             # we'd advertise an empty capability and waste tokens.
             maybe("skill", lambda: SkillTool(self.skill_index))
         maybe("todo_write", lambda: TodoWriteTool(self.todo_store))
+        if self.context.depth == 0:
+            from .tools.install_skill import InstallSkillTool
+            maybe("install_skill", InstallSkillTool)
 
     def _apply_plugins(self) -> None:
         """Discover + apply plugins to this loop. Failures are non-fatal."""
@@ -370,11 +384,77 @@ class AgentLoop:
         except Exception as exc:  # never let a plugin crash startup
             self._sink.notice(f"plugins skipped: {exc}", level="dim")
             return
+        self._applied_plugins = applied
+        enabled_set = set(applied.names)
+        for tname, origin in applied.tool_origins.items():
+            self._tool_origins.setdefault(tname, origin)
+
+        # Standalone skills that explicitly declare `plugin: <name>` in frontmatter
+        # follow that plugin's enabled/disabled lifecycle.
+        for sname in list(self.skill_index.names()):
+            sk = self.skill_index.get(sname)
+            if sk is not None and sk.plugin:
+                if sk.plugin not in enabled_set:
+                    self.skill_index.remove(sname)
+                else:
+                    self._skill_origins[sname] = sk.plugin
+                    det = applied.details.setdefault(sk.plugin, {})
+                    sk_list = det.setdefault("skills", [])
+                    if sname not in sk_list:
+                        sk_list.append(sname)
+
+        # Register plugin-bundled skills (project/user overrides with same name win).
+        for sk in applied.skills:
+            if sk.name not in self.skill_index.skills:
+                self.skill_index.add(sk)
+            if sk.plugin:
+                self._skill_origins.setdefault(sk.name, sk.plugin)
+
+        # If plugins introduced the first skill(s), expose the `skill` loader tool.
+        if self.skill_index.names() and self.registry.get("skill") is None:
+            self.registry.register(SkillTool(self.skill_index))
+
         self._prompt_sections = applied.prompt_sections
         self._prompt_middleware = applied.prompt_middleware
         self._tool_middleware = applied.tool_middleware
         self._plugin_commands = applied.commands
         self._turn_policies = applied.turn_policies
+
+    def reload_skills(self) -> list[str]:
+        """Hot-reload disk skills + active plugin skills and refresh system prompt.
+
+        Called automatically after `install_skill` or writing into `.codelet/skills/`
+        so newly installed or created skills become usable on the very next turn.
+        """
+        fresh = load_skills()
+        applied = self._applied_plugins
+        enabled_set = set(applied.names)
+        self._skill_origins = {}
+
+        for sname in list(fresh.names()):
+            sk = fresh.get(sname)
+            if sk is not None and sk.plugin:
+                if sk.plugin not in enabled_set:
+                    fresh.remove(sname)
+                else:
+                    self._skill_origins[sname] = sk.plugin
+                    det = applied.details.setdefault(sk.plugin, {})
+                    sk_list = det.setdefault("skills", [])
+                    if sname not in sk_list:
+                        sk_list.append(sname)
+
+        for sk in applied.skills:
+            if sk.name not in fresh.skills:
+                fresh.add(sk)
+            if sk.plugin:
+                self._skill_origins.setdefault(sk.name, sk.plugin)
+
+        self.skill_index = fresh
+        if self.skill_index.names():
+            self.registry.unregister("skill")
+            self.registry.register(SkillTool(self.skill_index))
+        self.rebuild_system_prompt()
+        return self.skill_index.names()
 
     async def _decide_turn(self, text: str) -> TurnPolicy | None:
         """First policy a plugin returns wins. A failing policy is skipped: the
@@ -426,8 +506,11 @@ class AgentLoop:
         self._tool_middleware.extend(ctx.tool_middleware)
         self._plugin_commands.update(ctx.commands)
         self._turn_policies.extend(ctx.turn_policies)
+        added = [n for n in self.registry.names() if n not in before]
+        for n in added:
+            self._tool_origins[n] = "evolved"
         self.rebuild_system_prompt()
-        return [n for n in self.registry.names() if n not in before]
+        return added
 
     def inherit_plugins_from(self, parent: "AgentLoop") -> None:
         """Sub-agents call this to inherit the parent's plugin middleware, prompt
@@ -452,17 +535,184 @@ class AgentLoop:
     # ---------- runtime tool/skill toggles (GUI hot-plug) ----------
 
     def tools_state(self) -> list[dict[str, Any]]:
-        return [{"name": t.name, "description": t.description,
-                 "enabled": t.name not in self._disabled_tools}
-                for t in self.registry.all_tools()]
+        return [
+            {
+                "name": t.name,
+                "description": t.description,
+                "enabled": t.name not in self._disabled_tools,
+                "source": self._tool_origins.get(t.name, "core"),
+                "read_only": bool(getattr(t, "read_only", False)),
+            }
+            for t in self.registry.all_tools()
+        ]
+
+    def plugins_state(self) -> list[dict[str, Any]]:
+        return list_available_plugins(self.config.plugins, applied=self._applied_plugins)
+
+    def plugin_commands_state(self) -> list[dict[str, str]]:
+        return [
+            {"name": name, "description": "plugin command", "source": "plugin"}
+            for name in sorted(self._plugin_commands.keys())
+        ]
+
+    def todos_state(self) -> list[dict[str, str]]:
+        return [
+            {"content": t.content, "status": t.status, "activeForm": t.active_form}
+            for t in self.todo_store.todos
+        ]
+
+    async def compact_now(self, focus: str = "") -> dict[str, Any]:
+        """Manually compact conversation context (used by /compact & Cockpit)."""
+        return await self.context.force_compact(
+            self.client, pinned=self._pinned_state(), focus=focus
+        )
+
+    async def ask_btw(
+        self,
+        question: str,
+        *,
+        history: list[dict[str, str]] | None = None,
+        include_context: bool = True,
+        on_text: "Callable[[str], None] | None" = None,
+    ) -> str:
+        """Isolated side-panel Q&A (`/btw`): never mutates `self.context.messages`,
+        runs with `tools=[]` so it can even execute concurrently while a main turn
+        is in flight."""
+        sys_parts = [
+            "You are answering a quick side question (`/btw`) from the user in a side panel.",
+            "Be direct, concise, and helpful. Do NOT attempt tool calls or file edits.",
+        ]
+        if include_context and self.context.messages:
+            snippets: list[str] = []
+            total = 0
+            for m in self.context.messages[-12:]:
+                role = m.get("role", "?")
+                raw = m.get("content", "")
+                if isinstance(raw, list):
+                    pieces = []
+                    for b in raw:
+                        if not isinstance(b, dict):
+                            continue
+                        if b.get("type") == "text":
+                            pieces.append(str(b.get("text", "")))
+                        elif b.get("type") == "tool_use":
+                            pieces.append(f"[tool:{b.get('name')}]")
+                        elif b.get("type") == "tool_result":
+                            pieces.append(f"[result:{str(b.get('content', ''))[:240]}]")
+                    txt = " ".join(pieces)
+                else:
+                    txt = str(raw)
+                txt = txt.strip()
+                if not txt:
+                    continue
+                if len(txt) > 1200:
+                    txt = txt[:1200] + "…"
+                if total + len(txt) > 8000:
+                    break
+                snippets.append(f"- {role}: {txt}")
+                total += len(txt)
+            if snippets:
+                sys_parts.append(
+                    "Read-only snapshot of the main conversation (for background reference only):\n"
+                    + "\n".join(snippets)
+                )
+
+        msgs: list[dict[str, Any]] = []
+        for h in (history or [])[-12:]:
+            r = h.get("role")
+            c = h.get("text") or h.get("content")
+            if r in ("user", "assistant") and c:
+                msgs.append({"role": r, "content": str(c)})
+        msgs.append({"role": "user", "content": question})
+
+        loop = asyncio.get_running_loop()
+        queue: "asyncio.Queue[str | None]" = asyncio.Queue()
+
+        def _delta(d: str) -> None:
+            loop.call_soon_threadsafe(queue.put_nowait, d)
+
+        def _call() -> LLMResponse:
+            started = time.perf_counter()
+            resp = self.client.chat(
+                messages=msgs,
+                system="\n\n".join(sys_parts),
+                tools=[],
+                model=self.config.model,
+                max_tokens=min(self.config.max_tokens, 4096),
+                on_text=_delta if on_text is not None else None,
+            )
+            if resp.usage is not None and not resp.usage.get("latency_ms"):
+                resp.usage["latency_ms"] = round((time.perf_counter() - started) * 1000.0, 1)
+            return resp
+
+        if on_text is None:
+            response = await asyncio.to_thread(_call)
+            if response.usage:
+                self.telemetry.record_chat(self.config.model, response.usage)
+            return "\n".join(response.text_blocks).strip()
+
+        def _call_wrapped() -> LLMResponse:
+            try:
+                return _call()
+            finally:
+                loop.call_soon_threadsafe(queue.put_nowait, None)
+
+        task = asyncio.create_task(asyncio.to_thread(_call_wrapped))
+        got_any = False
+        while True:
+            item = await queue.get()
+            if item is None:
+                break
+            got_any = True
+            on_text(item)
+        response = await task
+        text = "\n".join(response.text_blocks).strip()
+        if not got_any and text:
+            on_text(text)
+        if response.usage:
+            self.telemetry.record_chat(self.config.model, response.usage)
+        return text
+
+    def export_markdown(self) -> str:
+        """Render the current conversation as clean Markdown for `/export`."""
+        lines = [
+            f"# codelet conversation ({self.config.model})",
+            "",
+        ]
+        for m in self.context.messages:
+            role = "You" if m.get("role") == "user" else "codelet"
+            content = m.get("content", "")
+            if isinstance(content, str):
+                if content.strip():
+                    lines.extend([f"## {role}", "", content.strip(), ""])
+                continue
+            if not isinstance(content, list):
+                continue
+            texts = [str(b.get("text", "")).strip() for b in content if isinstance(b, dict) and b.get("type") == "text"]
+            tools = [f"`{b.get('name')}`" for b in content if isinstance(b, dict) and b.get("type") == "tool_use"]
+            body = "\n\n".join(t for t in texts if t)
+            if tools:
+                body = (body + "\n\n" if body else "") + "Tools: " + ", ".join(tools)
+            if body:
+                lines.extend([f"## {role}", "", body, ""])
+        return "\n".join(lines).rstrip() + "\n"
 
     def skills_state(self) -> list[dict[str, Any]]:
         out = []
         for name in self.skill_index.names():
             s = self.skill_index.get(name)
             if s is not None:
-                out.append({"name": name, "description": s.description,
-                            "enabled": name not in self._disabled_skills})
+                plugin = self._skill_origins.get(name) or s.plugin
+                source = f"plugin:{plugin}" if plugin else (s.scope or "standalone")
+                out.append({
+                    "name": name,
+                    "description": s.description,
+                    "enabled": name not in self._disabled_skills,
+                    "source": source,
+                    "plugin": plugin,
+                    "scope": s.scope or "standalone",
+                    "category": s.category or "",
+                })
         return out
 
     def set_tool_enabled(self, name: str, enabled: bool) -> None:
@@ -500,56 +750,89 @@ class AgentLoop:
         When `streamed_text` is True, the assistant's text was already printed
         live, so the caller must not re-print it.
         """
-        # The SDK call is sync; offload to a worker thread so we don't block the
-        # event loop (and so the spinner / stream consumer can run concurrently).
+        started = time.perf_counter()
         if not self._stream or not self._sink.wants_stream:
             response = await asyncio.to_thread(self._chat_blocking)
+            if response.usage is not None and not response.usage.get("latency_ms"):
+                response.usage["latency_ms"] = round((time.perf_counter() - started) * 1000.0, 1)
             self._record_usage(response)
             return response, False
 
         loop = asyncio.get_running_loop()
-        queue: "asyncio.Queue[str | None]" = asyncio.Queue()
+        # Tuple queue: ("text", delta) | ("reasoning", delta) | None (sentinel)
+        queue: "asyncio.Queue[tuple[str, str] | None]" = asyncio.Queue()
 
         def on_text(delta: str) -> None:
-            # Runs in the worker thread -- hop back onto the loop thread safely.
-            loop.call_soon_threadsafe(queue.put_nowait, delta)
+            loop.call_soon_threadsafe(queue.put_nowait, ("text", delta))
+
+        def on_reasoning(delta: str) -> None:
+            loop.call_soon_threadsafe(queue.put_nowait, ("reasoning", delta))
 
         async def call() -> LLMResponse:
             try:
-                return await asyncio.to_thread(self._chat_blocking, on_text)
+                return await asyncio.to_thread(self._chat_blocking, on_text, on_reasoning)
             finally:
                 loop.call_soon_threadsafe(queue.put_nowait, None)  # end sentinel
 
         task = asyncio.create_task(call())
 
         first = await self._spin_until_first_token(queue)
-        printed = False
+        printed_text = False
+        emit_reasoning = getattr(self._sink, "reasoning_delta", None)
+
+        def _emit(item: tuple[str, str]) -> None:
+            nonlocal printed_text
+            kind, chunk = item
+            if kind == "reasoning":
+                if callable(emit_reasoning):
+                    emit_reasoning(chunk)
+            else:
+                self._sink.text_delta(chunk)
+                printed_text = True
+
         if first is not None:
-            self._sink.text_delta(first)
-            printed = True
+            _emit(first)
             while True:
                 item = await queue.get()
                 if item is None:
                     break
-                self._sink.text_delta(item)
-        if printed:
+                _emit(item)
+        if printed_text:
             self._sink.stream_end()
 
         response = await task
+        if response.usage is not None and not response.usage.get("latency_ms"):
+            response.usage["latency_ms"] = round((time.perf_counter() - started) * 1000.0, 1)
         self._record_usage(response)
-        return response, printed
+        return response, printed_text
 
-    def _chat_blocking(self, on_text: "Callable[[str], None] | None" = None) -> LLMResponse:
+    def _chat_blocking(
+        self,
+        on_text: "Callable[[str], None] | None" = None,
+        on_reasoning: "Callable[[str], None] | None" = None,
+    ) -> LLMResponse:
         schemas = [s for s in self.registry.api_schemas()
                    if s.get("name") not in self._disabled_tools]
-        return self.client.chat(
-            messages=self.context.get_api_messages(),
-            system=self.context.system_prompt,
-            tools=schemas,
-            model=self.config.model,
-            max_tokens=self.config.max_tokens,
-            on_text=on_text,
-        )
+        kwargs: dict[str, Any] = {
+            "messages": self.context.get_api_messages(),
+            "system": self.context.system_prompt,
+            "tools": schemas,
+            "model": self.config.model,
+            "max_tokens": self.config.max_tokens,
+            "on_text": on_text,
+        }
+        # Only pass optional kwargs when the client accepts them (keeps test stubs compatible).
+        try:
+            sig = inspect.signature(self.client.chat)
+            has_varkw = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
+            if on_reasoning is not None and ("on_reasoning" in sig.parameters or has_varkw):
+                kwargs["on_reasoning"] = on_reasoning
+            effort = getattr(self.config, "reasoning_effort", "auto")
+            if effort and effort != "auto" and ("reasoning_effort" in sig.parameters or has_varkw):
+                kwargs["reasoning_effort"] = effort
+        except (TypeError, ValueError):
+            pass
+        return self.client.chat(**kwargs)
 
     def _trace(self, kind: str, **fields: Any) -> None:
         if self.trajectory is not None:
@@ -558,10 +841,14 @@ class AgentLoop:
     def _record_usage(self, response: LLMResponse) -> None:
         self._last_cost = None
         if response.usage:
-            row = self.telemetry.record_chat(self.config.model, response.usage)
-            self._last_cost = row.cost_usd
-            # Runs before the reply is appended: the count covers what was sent.
+            # Anchor context before recording so context_tokens reflects the real call.
             self.context.note_usage(response.usage)
+            row = self.telemetry.record_chat(
+                self.config.model,
+                response.usage,
+                context_tokens=self.context.estimate_tokens(),
+            )
+            self._last_cost = row.cost_usd
 
     def _pinned_state(self) -> str:
         """State re-attached verbatim after an L2 summary: the plan must not be
@@ -677,7 +964,9 @@ class AgentLoop:
             if "tool_input" in outcome.overrides and isinstance(outcome.overrides["tool_input"], dict):
                 tool_input = outcome.overrides["tool_input"]
 
-        denial = self.permission_gate.check(tool, tool_input)
+        denial = self.permission_gate.check(
+            tool, tool_input, defer_confirm=(self._confirm_callback is not None)
+        )
         if denial is not None:
             self._sink.notice(denial.output, level="error")
             return self._error_result(call.id, denial.output), "permission_denied", denial.output
@@ -689,15 +978,20 @@ class AgentLoop:
             self._sink.notice(msg, level="warn")
             return self._error_result(call.id, msg), "readonly_blocked", msg
 
-        # Diff preview + confirmation for destructive writes in ASK mode. The
-        # callback is None for subagents and for tests that explicitly opt out.
-        # It may be sync (CLI y/N) or async (web round-trip) -- await if awaitable.
-        if (
-            self.config.permission_mode == PermissionMode.ASK
-            and (call.name in _DIFF_CONFIRM_TOOLS or tool.confirm_in_ask)
-            and self._confirm_callback is not None
-        ):
-            preview = tool.preview_diff(tool_input)
+        # Diff preview + confirmation for destructive writes (ASK / NORMAL) and
+        # non-whitelisted bash commands. Routed through the sync/async callback
+        # so the Web GUI never blocks on terminal `input()`.
+        if self._confirm_callback is not None:
+            preview: str | None = None
+            if (
+                self.config.permission_mode in (PermissionMode.ASK, PermissionMode.NORMAL)
+                and (call.name in _DIFF_CONFIRM_TOOLS or tool.confirm_in_ask)
+            ):
+                preview = tool.preview_diff(tool_input)
+            elif self.permission_gate.needs_bash_confirmation(tool, tool_input):
+                cmd = str(tool_input.get("command", "")).strip()
+                preview = f"$ {cmd}" if cmd else None
+
             if preview:
                 decision = self._confirm_callback(call.name, preview)
                 if inspect.isawaitable(decision):
@@ -712,7 +1006,21 @@ class AgentLoop:
         except Exception as exc:
             result = ToolResult(output=f"Tool raised: {exc}", is_error=True)
 
+        self._tool_call_counts[call.name] = self._tool_call_counts.get(call.name, 0) + 1
         self._sink.tool_result(call.name, result.output, result.is_error)
+        if not result.is_error:
+            if call.name == "todo_write":
+                emit_todos = getattr(self._sink, "todos_updated", None)
+                if callable(emit_todos):
+                    emit_todos(self.todos_state())
+            elif call.name == "install_skill" or (
+                call.name in ("write_file", "edit_file")
+                and any(
+                    marker in str(tool_input.get("path", "")).replace("\\", "/").lower()
+                    for marker in (".codelet/skills", ".codelet/plugins")
+                )
+            ):
+                self.reload_skills()
 
         # PostToolUse: best-effort logging, never blocks the result.
         if self.hooks.has_hooks("PostToolUse"):

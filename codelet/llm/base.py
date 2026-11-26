@@ -41,7 +41,8 @@ class LLMResponse:
     tool_calls: list[ToolCall] = field(default_factory=list)
     raw_content: list[dict[str, Any]] = field(default_factory=list)
     stop_reason: str = ""
-    usage: dict[str, int] = field(default_factory=dict)
+    usage: dict[str, Any] = field(default_factory=dict)
+    reasoning_blocks: list[str] = field(default_factory=list)
 
 
 class LLMClient(ABC):

@@ -44,8 +44,12 @@ class _Stub(LLMClient):
 def _client(monkeypatch, tmp_path, script: list[LLMResponse]) -> TestClient:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(agent_loop, "build_client", lambda config: _Stub(script))
+    from codelet.llm.models import ModelCatalog
     from codelet.web.server import create_app
-    return TestClient(create_app())
+    return TestClient(create_app(
+        catalog=ModelCatalog(cache_path=tmp_path / "models_cache.json"),
+        auto_refresh=False,
+    ))
 
 
 def _drain(ws, on_permission=None) -> list[dict]:

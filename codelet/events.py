@@ -51,6 +51,12 @@ class AgentSink(Protocol):
     def notice(self, message: str, *, level: str = "info") -> None:
         """A one-off message: permission denial, hook block, compaction warning."""
 
+    def reasoning_delta(self, text: str) -> None:
+        """A chunk of streamed reasoning/thinking text."""
+
+    def todos_updated(self, todos: list[dict[str, Any]]) -> None:
+        """The agent's task checklist changed."""
+
     def thinking(self) -> ContextManager[Status]:
         """Context manager yielding a Status shown until the first token arrives."""
 
@@ -71,6 +77,8 @@ class NullSink:
     def tool_start(self, name: str, tool_input: dict[str, Any]) -> None: ...
     def tool_result(self, name: str, output: str, is_error: bool) -> None: ...
     def notice(self, message: str, *, level: str = "info") -> None: ...
+    def reasoning_delta(self, text: str) -> None: ...
+    def todos_updated(self, todos: list[dict[str, Any]]) -> None: ...
 
     @contextmanager
     def thinking(self) -> Iterator[Status]:

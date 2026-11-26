@@ -32,8 +32,14 @@ Session 持久化 / Slash 命令模板 / Diff 预览**。
 - [x] **P10** 分层上下文压缩（写入时截断 → 零 LLM 清理旧工具输出 → 七节结构化滚动摘要 → 保持配对的硬上限，token 预算以服务商 usage 为锚）+ 保留评测，见 [Context 压缩](#context-压缩p4)
 - [x] **P11** 跨会话记忆：内置 **memory** 插件（有类型的 markdown 条目、索引进系统提示词、按 key 覆盖、ASK 模式 diff 审批、拒存密钥）+ 两次会话评测：会话 2 照做用户纠正的比例从 3/20 到 19/20，见 [docs/plugin-architecture.md · 记忆](docs/plugin-architecture.md#记忆下一次会话该知道的少量事实)
 - [x] **P12** 意图路由：内置 **router** 插件把问答 / 规划 / 不明确的一轮设为只读（规则为主、模型兜底可选、分错只多一轮确认）；同时把 PLAN 模式从黑名单改成白名单——原来插件的写工具能穿过「只读」模式。测试集误拦 2/32、保护 41/48（加模型兜底 46/48）；端到端提问时擅自改文件 1/16 → 0/16，真要改的 8/8 不受影响。见 [docs/plugin-architecture.md · 意图路由](docs/plugin-architecture.md#意图路由只是在问的时候不改文件)
+- [x] **P13** 三栏 Web 工作台 + 原生 **cockpit** 插件 + 两层能力集与 GitHub Skill 安装：
+  - 动态拉取 OpenAI/ZenMux 模型目录与本地 TTL 缓存（`/models`、搜索与厂商筛选、定价与上下文窗口自动同步）
+  - 内置 **cockpit** 插件（默认启用）：上下文 5 段环形监控 + 缓存命中率 + TTFT/P95/tok/s 24 轮趋势 + ZenMux PAYG 实时余额（`ZENMUX_MANAGEMENT_API_KEY`，未配置时优雅降级为本地今日/7日消费看板）
+  - 四档执行模式（`normal / ask / plan / auto`）+ 五档可调思考强度（`--effort` / `/effort`：`auto / off / low / medium / high`）
+  - `/btw` 独立侧栏旁路问答（不污染主上下文，主回合运行中可并发提问）+ Stop 中断 + Thinking 推理折叠卡 + `Ctrl+K` 全局命令面板 + 左右侧栏拖拽调宽
+  - 两层能力集架构（上层 `Plugins · Packs` 热插拔捆绑 Tools + Skills + Commands；底层 `Tools` / `Skills` 细粒度开关）+ 目录型 `<name>/SKILL.md` + `install_skill` / `/install` 从 GitHub 安装并安全审计热重载 + 内置 `skill-creator`
 
-测试：`264 passed`（`pytest -q`）。
+测试：`335 passed`（`pytest -q`）。
 
 ## 环境
 
@@ -145,9 +151,10 @@ python -m codelet --resume 20260503-153045-ab12
 ```
 
 REPL 内置命令：
-`/tools` `/skills` `/commands` `/todos` `/usage` `/profile`
-`/sessions` `/resume <id>` `/save`
-`/mode [ask|auto|plan]` `/help` `/quit`。
+`/tools` `/skills` `/commands` `/todos` `/usage` `/cost` `/profile`
+`/models [keyword|refresh]` `/model [id]` `/mode [normal|ask|plan|auto]` `/effort [auto|off|low|medium|high]`
+`/btw <question>` `/compact [focus]` `/clear` `/plan [task]` `/diff` `/install <github-url>` `/export`
+`/sessions` `/resume <id>` `/save` `/help` `/quit`。
 
 用户自定义命令（项目里已带 `/audit` 示例，见
 [.codelet/commands/audit.md](.codelet/commands/audit.md)）放在
@@ -167,22 +174,27 @@ python -m codelet.web            # 起服务并自动打开浏览器（--no-open
 ```
 
 **聊天与执行**
-- **流式输出**:token 实时逐字显示(WebSocket)+ 等待指示
-- **工具可见**:每次工具调用渲染成卡片(参数 + 结果,按成功/失败着色)
-- **权限审批**:ASK 模式下 `write_file`/`edit_file` 弹 **diff 预览** + Approve/Reject;AUTO 直接执行;顶栏实时切换
-- **图片多模态**:composer 的 **＋** 可上传文件/图片;图片作为 vision content block 发给模型(需视觉模型),其它文件以路径注入让 agent 读
+- **流式输出与推理链**: token 与思考过程（`reasoning_delta` / `thinking_delta`）实时流式渲染，思考内容默认收纳在可折叠 `Thought process` 卡片；生成中点击发送键可随时 **Stop** 中断当前回合
+- **工具与任务可见**: 每次工具调用渲染成可折叠卡片（参数 + 结果按成功/失败着色）；调用 `todo_write` 时输入框上方出现置顶进度条
+- **四档权限审批**: `normal`（写文件预览 diff 确认，白名单常用命令自动跑）/ `ask`（写文件与非只读命令均确认）/ `plan`（只读规划）/ `auto`（自动执行，高危命令仍拦截）
+- **五档思考强度**: `Think` 选择器与 `/effort` 支持 `auto / off / low / medium / high` 实时切换（OpenAI/ZenMux 透传 `reasoning_effort`，Anthropic 映射 `thinking.budget_tokens`，普通模型自动降级不报错）
+- **图片与文件多模态**: composer 的 **＋**、粘贴或拖拽上传文件/图片；图片以 vision block 发给模型，其它文件以路径注入让 agent 读取
 
 **顶栏 / composer 上方控件**
-- **模型切换**:下拉直接换模型(列表来自 `.env` 的 `LLM_MODELS`;代理场景 base_url/api_key 不变,只换模型名)
-- **模式切换**:ask / auto / plan
-- **工作区**:`📁` chip 弹目录选择器,**从盘符根一层层选起**(C:\ / D:\ …,不再从用户目录起步),切到别的项目 —— 文件工具、`.codelet` skills/CLAUDE.md、会话随之切换
-- **Token/成本读数**:Turn 与 Session 的 in/out tokens + 预估成本(据 `settings.json` 的 `pricing`)
+- **模型切换**: 自动从当前 OpenAI 兼容端点（如 ZenMux `GET /api/v1/models`）定期拉取最新模型列表并本地缓存（默认 24h，可配 `LLM_MODELS_TTL`），带搜索、厂商分组、上下文长度/价格/能力标签与一键手动刷新；`.env` 的 `LLM_MODELS` 改为可选（置顶常用模型或离线兜底），同时自动将目录里的定价与上下文窗口同步到遥测与压缩预算
+- **顶栏状态胶囊与命令面板**: 迷你上下文占用环、ZenMux 实时余额胶囊、`Ctrl+K` 全局命令面板、明暗主题切换与左右侧栏折叠开关
+- **工作区**: `📁` chip 弹目录选择器，**从盘符根一层层选起**（C:\ / D:\ …），切到别的项目时文件工具、`.codelet` skills/CLAUDE.md、会话随之切换
 
-**侧栏**
-- **＋ New chat**:开新会话
-- **Conversations**(可折叠):当前项目会话列表,点击恢复,悬停有 **✎ 重命名 / 🗑 删除**
-- **Tools / Skills**(可折叠):每项一个复选框**热插拔**开关 —— 关掉的工具对模型隐藏、关掉的技能移出系统提示词索引;插件工具(如 rag 的 `search_docs`、`sandbox`)也在此列出;开启 **evolve** 后,模型自建的工具(`create_tool` 产物)在造出的**当轮即时刷新**到这里,无需重连
-- **用户名**(占位,预留登录)+ **⏻ Quit**(停掉后端服务)
+**三栏可拖拽工作台**
+- **左侧栏（可拖拉调宽，双击复位）**:
+  - **Conversations**: 当前项目会话列表，点击恢复，悬停支持 **✎ 内联重命名 / 🗑 删除**
+  - **Plugins · Packs**（上层功能包）: 一键热插拔启停整套插件及其捆绑的 `tool` / `✦ skill` / `/cmd`（内置 `cockpit` 默认启用，另有 `sandbox` / `rag` / `evolve` / `memory` / `router` 及自定义目录技能包）
+  - **Base Capabilities**（底层原子能力）: `Tools`（按 `Core / From plugins / Self-evolved` 分组）与 `Skills`（按 `Built-in / From plugins / Standalone · Project / Standalone · Global` 分组），支持细粒度热插拔开关
+- **右侧 Inspector 抽屉（可拖拉调宽，双击复位）**:
+  - **Cockpit**: 上下文窗口 SVG 环形仪表盘 + 5 段悬浮明细 + 一键 `/compact`、四档模式与五档思考强度控制、延迟（TTFT/均值/P95）与速度（tok/s）24 轮趋势图、ZenMux PAYG 余额与本地今日/7日消费模型分布
+  - **Side `/btw`**: 独立上下文旁路提问，读取主对话只读快照、绝不污染主上下文，即使主回合正在运行中也可并发提问
+  - **Tasks**: 实时任务清单与完成进度条
+  - **Changes**: 当前工作区 Git 变更文件列表与彩色 Unified Diff 查看器
 
 纯原生 HTML/JS,无构建链;只绑 `127.0.0.1`(本地)。
 
@@ -280,23 +292,31 @@ CLI 参数（`--model` `--mode` `--max-turns` 等）优先级 > settings.json > 
 
 REPL 每个 turn 末尾自动渲染面板；可用 `--no-telemetry` 关掉，或 `/usage` 手动查看。
 
-## Skill 系统
+## Skill 系统与安装
 
-放在 `./.codelet/skills/*.md`（项目级，覆盖用户级）或 `~/.codelet/skills/*.md`（用户级），格式：
+同时支持扁平单文件（`*.md`）与标准目录技能包（`<skill-name>/SKILL.md`，可携带 `scripts/`、`references/` 等伴随文件），加载优先级由低到高：
+
+1. **内置核心 Skill**（`codelet/skills/builtin/`）：自带 **`skill-creator`**，用自然语言描述需求即可让 Agent 帮你设计、落盘并热验证新 Skill；
+2. **用户全局**（`~/.codelet/skills/`）→ `Standalone · Global`；
+3. **项目本地**（`./.codelet/skills/`）→ `Standalone · Project`；
+4. **插件捆绑**（插件调用 `ctx.register_skill()` 或目录插件 `.codelet/plugins/<pack>/skills/`）→ 随所属插件热插拔。
+
+Frontmatter 格式：
 
 ```markdown
 ---
 name: python-review
 description: Audit Python files for unused imports, TODO comments
+category: review           # 可选：UI 展示分类标签
+plugin: memory             # 可选：挂靠到指定插件，随其启停
 triggers: [review, lint]
 allowed_tools: [glob, grep, read_file]
 ---
 # body...
 ```
 
-启动时只把 `name: description` 单行索引塞进 system prompt（最多 30 条、每行
-≤80 字符），完整 body 由 `skill` 工具按需取出 — 冷上下文不会因 skill 多而膨胀。
-项目里已带一个示例 [`.codelet/skills/python-review.md`](.codelet/skills/python-review.md)。
+- **直接从 GitHub 安装**：对话里直接贴 GitHub Skill 链接（支持 `blob/`、`tree/`、仓库根或 `raw` 链接），Agent 会调用 `install_skill`（或手动运行 `/install <url> [--global] [--plugin <pack>] [--category <cat>]`）自动校验 frontmatter、审计脚本安全并**热重载**，装完当轮立即生效。
+- 启动时只把 `name: description` 单行索引塞进 system prompt（最多 30 条、每行 ≤80 字符），完整 body 由 `skill` 工具按需取出 —— 冷上下文不会因 skill 多而膨胀。项目示例见 [`.codelet/skills/python-review.md`](.codelet/skills/python-review.md)。
 
 ## SubAgent + 并行 Task
 
@@ -345,7 +365,7 @@ eval / subagent / 一次性 prompt 场景默认关流式（拿完整结果更省
 ## 测试
 
 ```bash
-pytest -q          # 264 passed
+pytest -q          # 335 passed
 ```
 
 ## 目录结构（P1–P6）

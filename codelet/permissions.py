@@ -1,9 +1,7 @@
 """Two-layer permission gate.
 
 Layer 1: Tool.check_permissions() -- per-tool self-check (e.g. dangerous bash patterns)
-Layer 2: PermissionMode -- ASK / AUTO / PLAN
-
-P4 will add a third layer: settings.json allow/deny rules + hooks.
+Layer 2: PermissionMode -- NORMAL / ASK / AUTO / PLAN
 """
 from __future__ import annotations
 
@@ -17,9 +15,14 @@ class PermissionGate:
     def __init__(self, config: Config) -> None:
         self.config = config
 
-    def check(self, tool: Tool, params: dict[str, Any]) -> ToolResult | None:
-        """Return a ToolResult with is_error=True if denied, otherwise None."""
-        # Layer 1: tool self-check
+    def check(self, tool: Tool, params: dict[str, Any], *, defer_confirm: bool = False) -> ToolResult | None:
+        """Return a ToolResult with is_error=True if denied, otherwise None.
+
+        When `defer_confirm=True` (used by AgentLoop which routes interactive
+        approvals through its sync/async `confirm_callback`), shell confirmation
+        is handled by `needs_bash_confirmation()` instead of blocking on `input()`.
+        """
+        # Layer 1: tool self-check (always enforced, even in AUTO)
         denial = tool.check_permissions(params)
         if denial is not None:
             return ToolResult(output=f"Permission denied: {denial}", is_error=True)
@@ -28,9 +31,6 @@ class PermissionGate:
 
         # Layer 2: mode-based filtering
         if mode == PermissionMode.PLAN:
-            # Allowlist, not denylist: it used to block only bash / write_file /
-            # edit_file, so plugin tools that write (sandbox, create_tool,
-            # memory) went straight through a mode called read-only.
             if not tool.is_read_only(params):
                 return ToolResult(
                     output=f"Permission denied: '{tool.name}' can change files, which "
@@ -38,14 +38,25 @@ class PermissionGate:
                     is_error=True,
                 )
 
-        if mode == PermissionMode.ASK:
-            if tool.name == "bash":
-                cmd = params.get("command", "")
-                if not self._is_safe_command(cmd):
-                    if not self._ask_user(tool.name, params):
-                        return ToolResult(output="Permission denied: user rejected.", is_error=True)
+        if not defer_confirm and self.needs_bash_confirmation(tool, params):
+            if not self._ask_user(tool.name, params):
+                return ToolResult(output="Permission denied: user rejected.", is_error=True)
 
         return None
+
+    def needs_bash_confirmation(self, tool: Tool, params: dict[str, Any]) -> bool:
+        """True when a bash command should prompt the user before running."""
+        if tool.name != "bash":
+            return False
+        mode = self.config.permission_mode
+        if mode == PermissionMode.ASK:
+            # Strict: every non-read-only shell command asks for confirmation.
+            return not tool.is_read_only(params)
+        if mode == PermissionMode.NORMAL:
+            # Balanced: common dev commands in allowed_commands run freely; others ask.
+            cmd = params.get("command", "")
+            return not self._is_safe_command(cmd)
+        return False
 
     def _is_safe_command(self, command: str) -> bool:
         cmd_lower = command.strip().lower()

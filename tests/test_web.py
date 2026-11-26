@@ -44,9 +44,14 @@ class ScriptedClient(LLMClient):
 
 
 @pytest.fixture()
-def client(monkeypatch):
+def client(monkeypatch, tmp_path):
+    from codelet.llm.models import ModelCatalog
     monkeypatch.setattr("codelet.agent_loop.build_client", lambda config: ScriptedClient())
-    return TestClient(create_app())
+    monkeypatch.setattr("codelet.plugins.builtin.cockpit.default_usage_path", lambda: tmp_path / "cockpit_usage.jsonl")
+    return TestClient(create_app(
+        catalog=ModelCatalog(cache_path=tmp_path / "models_cache.json"),
+        auto_refresh=False,
+    ))
 
 
 def test_rest_panels(client):
@@ -142,10 +147,10 @@ def test_ws_set_model(client):
 
 def test_ws_new_conversation_clears(client):
     with client.websocket_connect("/ws") as ws:
-        _recv_until(ws, "skills")  # drain connect frames: profile, workspace, tools, skills
+        _recv_until(ws, "cockpit", limit=12)  # drain initial connect frames
         ws.send_json({"type": "new_conversation"})
         kinds = set()
-        for _ in range(5):
+        for _ in range(10):
             kinds.add(ws.receive_json()["type"])
             if {"cleared", "profile", "workspace"}.issubset(kinds):
                 break
@@ -207,3 +212,31 @@ def test_ws_set_workspace(client, tmp_path):
         f = _recv_until(ws, "workspace")
         assert f["cwd"] == target
         assert os.path.samefile(os.getcwd(), target)
+
+
+def test_api_plugins_and_ws_plugin_toggle(client):
+    plugins = client.get("/api/plugins").json()
+    names = {p["name"] for p in plugins}
+    assert {"sandbox", "rag", "evolve", "memory", "router"}.issubset(names)
+
+    with client.websocket_connect("/ws") as ws:
+        tools = _recv_until(ws, "tools")["tools"]
+        assert any(t["name"] == "read_file" and t["source"] == "core" for t in tools)
+        plug_frame = _recv_until(ws, "plugins")
+        cmd_frame = _recv_until(ws, "commands")
+        assert isinstance(cmd_frame["commands"], list)
+        assert any(p["name"] == "router" for p in plug_frame["plugins"])
+
+        # Enable `memory` plugin live via WS and verify its tool appears with source="memory".
+        ws.send_json({"type": "set_plugin_enabled", "name": "memory", "enabled": True})
+        p_after = _recv_until(ws, "plugins")["plugins"]
+        t_after = _recv_until(ws, "tools")["tools"]
+        assert any(p["name"] == "memory" and p["enabled"] for p in p_after)
+        assert any(t["name"] == "memory" and t["source"] == "memory" for t in t_after)
+
+        # Disable it again and verify the tool disappears cleanly.
+        ws.send_json({"type": "set_plugin_enabled", "name": "memory", "enabled": False})
+        p_off = _recv_until(ws, "plugins")["plugins"]
+        t_off = _recv_until(ws, "tools")["tools"]
+        assert any(p["name"] == "memory" and not p["enabled"] for p in p_off)
+        assert not any(t["name"] == "memory" for t in t_off)

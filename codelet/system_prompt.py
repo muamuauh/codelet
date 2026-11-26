@@ -29,6 +29,9 @@ You have access to the following tools:
 6. For multi-step tasks, track progress with the `todo_write` tool.
 7. Delegate focused subtasks (research across many files, repetitive analysis)
    to the `task` tool -- multiple Task calls in one turn run in parallel.
+8. To install a Skill from a GitHub URL, call `install_skill` directly instead
+   of scraping GitHub HTML with `web_fetch`. To create a new Skill from a user
+   description, load the `skill-creator` skill via `skill` first.
 
 {environment_section}
 ## Current Permission Mode: {permission_mode}
@@ -36,8 +39,9 @@ You have access to the following tools:
 {skill_section}{project_instructions}"""
 
 MODE_DESCRIPTIONS = {
-    "ask": "In ASK mode, potentially dangerous operations require user confirmation.",
-    "auto": "In AUTO mode, all operations are auto-approved (use with caution).",
+    "normal": "In NORMAL mode, file edits preview a diff for approval while standard safe commands run automatically.",
+    "ask": "In ASK mode, file edits and non-read-only commands require explicit user confirmation.",
+    "auto": "In AUTO mode, all operations are auto-approved except hard-denied dangerous patterns.",
     "plan": "In PLAN mode, only read-only operations are allowed; writes are blocked.",
 }
 

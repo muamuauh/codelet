@@ -17,7 +17,8 @@ starts heavily caching).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+import time
+from typing import Any, Callable
 
 from rich.panel import Panel
 from rich.table import Table
@@ -36,6 +37,19 @@ class TurnUsage:
     input_tokens: int = 0
     output_tokens: int = 0
     cost_usd: float | None = None  # None if model not priced
+    model: str = ""
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    latency_ms: float = 0.0
+    ttft_ms: float | None = None
+    context_tokens: int = 0
+    ts: float = 0.0
+
+    @property
+    def speed_tps(self) -> float | None:
+        if self.output_tokens > 0 and self.latency_ms > 50:
+            return round(self.output_tokens / (self.latency_ms / 1000.0), 1)
+        return None
 
 
 @dataclass
@@ -43,6 +57,7 @@ class Telemetry:
     pricing: dict[str, dict[str, float]] = field(default_factory=lambda: dict(DEFAULT_PRICING))
     turns: list[TurnUsage] = field(default_factory=list)
     last_turn_start_index: int = 0  # marker for "this user turn started here"
+    on_record: list[Callable[[TurnUsage], None]] = field(default_factory=list)
 
     @property
     def cumulative(self) -> TurnUsage:
@@ -65,20 +80,112 @@ class Telemetry:
         """
         self.last_turn_start_index = len(self.turns)
 
-    def record_chat(self, model: str, usage: dict[str, int]) -> TurnUsage:
+    def record_chat(
+        self,
+        model: str,
+        usage: dict[str, Any],
+        *,
+        context_tokens: int = 0,
+    ) -> TurnUsage:
         """Append one LLM-call usage record. Returns the row for callers that
         want to log it inline."""
         ipt = int(usage.get("input_tokens", 0) or 0)
         out = int(usage.get("output_tokens", 0) or 0)
+        cache_read = int(usage.get("cache_read_tokens", 0) or 0)
+        cache_write = int(usage.get("cache_write_tokens", 0) or 0)
+        latency_ms = float(usage.get("latency_ms", 0.0) or 0.0)
+        ttft_raw = usage.get("ttft_ms")
+        ttft_ms = float(ttft_raw) if ttft_raw is not None else None
         cost: float | None
         prices = self.pricing.get(model)
         if prices:
             cost = (ipt / 1_000_000) * prices["input"] + (out / 1_000_000) * prices["output"]
         else:
             cost = None
-        row = TurnUsage(input_tokens=ipt, output_tokens=out, cost_usd=cost)
+        row = TurnUsage(
+            input_tokens=ipt,
+            output_tokens=out,
+            cost_usd=cost,
+            model=model,
+            cache_read_tokens=cache_read,
+            cache_write_tokens=cache_write,
+            latency_ms=latency_ms,
+            ttft_ms=ttft_ms,
+            context_tokens=context_tokens or ipt,
+            ts=time.time(),
+        )
         self.turns.append(row)
+        for cb in list(self.on_record):
+            try:
+                cb(row)
+            except Exception:
+                pass
         return row
+
+    def cache_stats(self) -> dict[str, Any]:
+        """Latest and cumulative prompt cache hit rate."""
+        def _rate(ipt: int, cr: int) -> float:
+            if cr <= 0:
+                return 0.0
+            # OpenAI includes cached_tokens inside prompt_tokens; Anthropic reports
+            # cache_read separately. Using max(ipt, cr) stays bounded in [0, 1].
+            denom = max(ipt, cr)
+            return round(min(1.0, cr / denom) * 100.0, 1) if denom > 0 else 0.0
+
+        tot_in = sum(t.input_tokens for t in self.turns)
+        tot_cache = sum(t.cache_read_tokens for t in self.turns)
+        tot_out = sum(t.output_tokens for t in self.turns)
+        latest = self.turns[-1] if self.turns else None
+        latest_in = latest.input_tokens if latest else 0
+        latest_cache = latest.cache_read_tokens if latest else 0
+        latest_uncached = max(0, latest_in - latest_cache)
+        return {
+            "latest_hit_pct": _rate(latest_in, latest_cache),
+            "cumulative_hit_pct": _rate(tot_in, tot_cache),
+            "latest_uncached_in": latest_uncached,
+            "latest_cache_read": latest_cache,
+            "latest_out": latest.output_tokens if latest else 0,
+            "total_uncached_in": max(0, tot_in - tot_cache),
+            "total_cache_read": tot_cache,
+            "total_out": tot_out,
+            "total_calls": len(self.turns),
+        }
+
+    def perf_summary(self, limit: int = 24) -> dict[str, Any]:
+        """Latency (ms/s) and output throughput (tok/s) summary + recent trend."""
+        with_lat = [t for t in self.turns if t.latency_ms > 0]
+        speeds = [s for t in with_lat if (s := t.speed_tps) is not None]
+        lats = sorted(t.latency_ms for t in with_lat)
+
+        def _p95(vals: list[float]) -> float | None:
+            if not vals:
+                return None
+            idx = min(len(vals) - 1, max(0, int(len(vals) * 0.95) - (1 if len(vals) > 1 else 0)))
+            return round(vals[idx], 1)
+
+        latest = with_lat[-1] if with_lat else None
+        recent = self.turns[-limit:]
+        series = [
+            {
+                "idx": idx + 1,
+                "speed": t.speed_tps or 0.0,
+                "latency_s": round(t.latency_ms / 1000.0, 2),
+                "context_k": round((t.context_tokens or t.input_tokens) / 1000.0, 1),
+                "out": t.output_tokens,
+            }
+            for idx, t in enumerate(recent)
+        ]
+        return {
+            "latest_latency_ms": round(latest.latency_ms, 1) if latest else None,
+            "latest_ttft_ms": round(latest.ttft_ms, 1) if (latest and latest.ttft_ms is not None) else None,
+            "latest_speed_tps": latest.speed_tps if latest else None,
+            "avg_latency_ms": round(sum(lats) / len(lats), 1) if lats else None,
+            "p95_latency_ms": _p95(lats),
+            "avg_speed_tps": round(sum(speeds) / len(speeds), 1) if speeds else None,
+            "peak_speed_tps": round(max(speeds), 1) if speeds else None,
+            "samples": len(with_lat),
+            "series": series,
+        }
 
     def update_pricing(self, overrides: dict[str, dict[str, float]] | None) -> None:
         if not overrides:

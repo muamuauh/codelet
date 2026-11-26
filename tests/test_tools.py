@@ -18,7 +18,10 @@ from codelet.tools.grep_tool import GrepTool
 
 def test_default_registry_has_seven_tools():
     reg = ToolRegistry.default()
-    expected = {"bash", "read_file", "write_file", "edit_file", "glob", "grep", "web_fetch"}
+    expected = {
+        "bash", "read_file", "write_file", "edit_file",
+        "glob", "grep", "web_fetch",
+    }
     assert set(reg.names()) == expected
 
 

@@ -305,6 +305,19 @@ class MemoryPlugin:
             "user": Path(str(ctx.config.get("user_dir") or DEFAULT_USER_DIR)).expanduser(),
         })
         ctx.register_tool(MemoryTool(store))
+        ctx.register_skill(
+            name="memory-hygiene",
+            description="Store and curate durable cross-session facts without duplicating repo docs",
+            category="memory",
+            triggers=("remember", "preference", "memory", "convention"),
+            allowed_tools=("memory",),
+            body=(
+                "# Memory Hygiene Procedure\n\n"
+                "1. Before saving a new memory, inspect existing entries to update rather than duplicate.\n"
+                "2. Store durable user preferences, environment quirks, and key decisions — skip ephemeral task state.\n"
+                "3. Keep each memory entry concise and factual."
+            ),
+        )
         index = store.index()
         ctx.add_system_prompt_section(
             f"{PROMPT_HEAD}\n\n{index or '(no memories yet)'}\n\n{PROMPT_RULES}")

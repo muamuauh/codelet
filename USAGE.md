@@ -25,33 +25,46 @@ python -m codelet "在当前目录找出所有 TODO 注释"
 python -m codelet --resume <session-id>
 ```
 
-## 3. 权限模式（核心概念）
+## 3. 权限模式与思考强度（核心概念）
 
 | 模式 | 行为 | 用法 |
 |---|---|---|
-| `ask`（默认） | 每次执行工具/改文件前问你 `y/N` | 安全，适合不放心时 |
-| `auto` | 不逐步确认，连续干活 | `--mode auto` 或 REPL 里 `/mode auto` |
-| `plan` | 只规划不执行任何操作 | `--mode plan`，先看它打算怎么做 |
+| `normal` | 写文件预览 diff 确认，常用安全命令（`git status`/`python` 等）自动放行 | `--mode normal` 或 `/mode normal` |
+| `ask`（默认） | 写文件及所有非只读终端命令均弹窗/提示确认 | 安全，适合高敏感修改 |
+| `plan` | 只读分析与规划，所有写入类工具硬拦截 | `--mode plan` 或 `/plan <任务>` |
+| `auto` | 自动执行写文件与常规命令（仍拦截高危危险命令） | `--mode auto` 或 `/mode auto` |
+
+思考强度可通过 `--effort [auto|off|low|medium|high]`、`/effort` 或 Web 底部 `Think` 选择器随时调节（`auto` 跟随模型默认，非推理模型会自动降级忽略）。
 
 ```powershell
-python -m codelet --mode auto "把所有 print 改成 logging"
+python -m codelet --mode normal --effort medium "把所有 print 改成 logging"
+python -m codelet.web   # 启动本地三栏 Web 工作台
 ```
 
-改文件时（ask 模式）会先弹 **diff 预览**，确认 `y` 才写入；拒绝 `N` 它会根据反馈调整。
+改文件时（`ask` / `normal` 模式）会先弹 **diff 预览**，确认 `y` 才写入；拒绝 `N` 它会根据反馈调整。
 
-## 4. REPL 内置命令
+## 4. REPL / Web 内置命令
 
 ```
-/help                       所有命令
-/tools  /skills  /commands  查看可用工具 / 技能 / 自定义命令
-/mode [ask|auto|plan]       切权限模式
-/usage                      当前 token & 成本统计
-/profile                    当前激活的 LLM (provider, model, base_url)
-/todos                      查看任务清单
-/sessions                   会话列表（分两段，见下）
-/resume <id>                按 id 精确恢复某会话
-/save                       手动存档
-/quit                       退出
+/help                               所有命令
+/tools  /skills  /commands          查看可用工具 / 技能 / 自定义命令
+/models [keyword|refresh]           查看或刷新远程模型目录
+/model [id]                         查看或切换当前模型
+/mode [normal|ask|plan|auto]        切换四档权限模式
+/effort [auto|off|low|medium|high]  调整思考强度
+/btw <question>                     独立上下文旁路提问（不污染主对话）
+/compact [focus]                    手动压缩上下文（可选保留重点）
+/clear  /new                        清空并开启新对话
+/plan [task]                        切入只读规划模式
+/diff                               查看工作区 Git 变更与 Diff
+/cockpit [refresh]                  打开 Cockpit 监控 / 刷新 ZenMux 余额
+/install <github-url> [--global]    从 GitHub 安装 Skill 并立即热重载
+/export                             导出当前对话为 Markdown
+/usage  /cost                       当前会话及跨会话 token / 成本统计
+/profile                            当前激活的 LLM (provider, model, base_url)
+/todos                              查看任务清单
+/sessions  /resume <id>  /save      会话列表 / 恢复 / 手动存档
+/quit                               退出
 ```
 
 `/sessions` 分两段显示，每行以**标题**（该会话的第一句话）开头：
@@ -92,7 +105,8 @@ python -m codelet --base-url https://api.deepseek.com/v1 --api-key sk-xxx --mode
 | 功能 | 放哪 | 说明 |
 |---|---|---|
 | **自定义命令** | `.codelet/commands/<name>.md` | 用 `/<name> 参数` 调用，支持 `{args}` `{1}` `{2}` 占位（已带 `/audit` 示例）|
-| **Skill 技能** | `.codelet/skills/*.md` | 模型按需加载的专项知识（已带 `python-review` 示例）|
+| **Skill 技能** | `.codelet/skills/`（支持 `*.md` 与 `<name>/SKILL.md`） | 模型按需加载的专项知识；内置 `skill-creator` 可按描述生成新技能，或用 `/install <github-url>` 直接安装热重载 |
+| **Plugin 插件** | `.codelet/plugins/`（`*.py` 或目录技能包） | 上层热插拔功能包，可捆绑 Tools + Skills + Commands；内置 `cockpit` 默认启用 |
 | **Hooks** | `settings.json` 的 `hooks` | 工具执行前后/收到输入时跑自定义 shell 命令，可拦截/改写 |
 | **SubAgent** | 模型自动调用 `task` 工具 | 把子任务派给隔离上下文的子代理，可并行 |
 

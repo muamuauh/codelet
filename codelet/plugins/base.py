@@ -22,8 +22,10 @@ docs/plugin-architecture.md for worked sandbox / RAG examples.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol, runtime_checkable
 
+from ..skills.loader import Skill, iter_skill_files, parse_skill_file
 from ..tools.base import Tool, ToolRegistry, ToolResult
 
 @dataclass
@@ -68,12 +70,50 @@ class PluginContext:
         self.tool_middleware: list[ToolMiddleware] = []
         self.commands: dict[str, Callable[[str], str]] = {}
         self.turn_policies: list[TurnPolicyFn] = []
+        self.skills: list[Skill] = []
 
     def register_tool(self, tool: Tool) -> None:
         """Add a tool. Registering a name that already exists overrides it, so a
         plugin can either add a new capability or replace a core tool by name."""
         self._registry.unregister(tool.name)
         self._registry.register(tool)
+
+    def register_skill(
+        self,
+        skill: Skill | None = None,
+        *,
+        name: str = "",
+        description: str = "",
+        body: str = "",
+        category: str = "",
+        triggers: tuple[str, ...] = (),
+        allowed_tools: tuple[str, ...] | None = None,
+    ) -> None:
+        """Bundle a Skill with this plugin so it hot-plugs in/out with the plugin."""
+        if skill is None:
+            if not name or not description:
+                raise ValueError("register_skill requires a Skill instance or name + description")
+            skill = Skill(
+                name=name.strip(),
+                description=description.strip(),
+                body=body.strip(),
+                triggers=triggers,
+                allowed_tools=allowed_tools,
+                category=category.strip(),
+                scope="plugin",
+            )
+        self.skills.append(skill)
+
+    def register_skills_dir(self, directory: str | Path, *, plugin_name: str | None = None) -> list[str]:
+        """Load every flat `*.md` and `<dir>/SKILL.md` inside `directory`."""
+        d = Path(directory)
+        added: list[str] = []
+        for md in iter_skill_files(d):
+            sk = parse_skill_file(md, scope="plugin", plugin=plugin_name)
+            if sk is not None:
+                self.skills.append(sk)
+                added.append(sk.name)
+        return added
 
     def add_system_prompt_section(self, text: str) -> None:
         if text and text.strip():

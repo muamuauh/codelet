@@ -11,6 +11,7 @@ from typing import Any
 
 
 class PermissionMode(Enum):
+    NORMAL = "normal"
     ASK = "ask"
     AUTO = "auto"
     PLAN = "plan"
@@ -19,6 +20,9 @@ class PermissionMode(Enum):
 class LLMProvider(Enum):
     ANTHROPIC = "anthropic"
     OPENAI = "openai"  # OpenAI-compatible (DeepSeek/Ollama/SiliconFlow); P5
+
+
+REASONING_EFFORTS = ("auto", "off", "low", "medium", "high")
 
 
 @dataclass
@@ -33,6 +37,7 @@ class Config:
     # Loop
     max_turns: int = 30
     max_tokens: int = 8192
+    reasoning_effort: str = "auto"   # auto | off | low | medium | high
 
     # Streaming: print assistant text token-by-token + show a spinner while
     # waiting for the first token. Auto-disabled for non-TTY output and for

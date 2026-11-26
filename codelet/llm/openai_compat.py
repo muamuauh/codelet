@@ -33,6 +33,7 @@ Provider quirks handled:
 from __future__ import annotations
 
 import json
+import time
 from typing import Any, Callable
 
 from .base import LLMClient, LLMResponse, ToolCall
@@ -69,6 +70,8 @@ class OpenAICompatClient(LLMClient):
         model: str,
         max_tokens: int = 8192,
         on_text: "Callable[[str], None] | None" = None,
+        on_reasoning: "Callable[[str], None] | None" = None,
+        reasoning_effort: str | None = None,
     ) -> LLMResponse:
         oa_messages: list[dict[str, Any]] = []
         if system:
@@ -83,10 +86,23 @@ class OpenAICompatClient(LLMClient):
         if tools:
             kwargs["tools"] = self._to_openai_tools(tools)
 
+        eff = (reasoning_effort or "").strip().lower()
+        if eff == "off":
+            kwargs["reasoning_effort"] = "none"
+        elif eff in ("none", "minimal", "low", "medium", "high", "xhigh"):
+            kwargs["reasoning_effort"] = eff
+
         if on_text is not None:
             try:
-                return self._chat_streaming(kwargs, on_text)
+                return self._chat_streaming(kwargs, on_text, on_reasoning=on_reasoning)
             except Exception:
+                # If the upstream model rejected `reasoning_effort`, retry streaming without it.
+                if "reasoning_effort" in kwargs:
+                    fallback_kw = {k: v for k, v in kwargs.items() if k != "reasoning_effort"}
+                    try:
+                        return self._chat_streaming(fallback_kw, on_text, on_reasoning=on_reasoning)
+                    except Exception:
+                        pass
                 # Some "OpenAI-compatible" proxies reject stream / stream_options.
                 # Fall back to a normal call so the turn still completes (just
                 # without live typing). Safe because nothing was printed yet on
@@ -94,13 +110,28 @@ class OpenAICompatClient(LLMClient):
                 # delta successfully arrives.
                 pass
 
-        response = self._client.chat.completions.create(**kwargs)
-        return self._to_internal_response(response)
+        started = time.perf_counter()
+        try:
+            response = self._client.chat.completions.create(**kwargs)
+        except Exception:
+            if "reasoning_effort" not in kwargs:
+                raise
+            fallback_kw = {k: v for k, v in kwargs.items() if k != "reasoning_effort"}
+            response = self._client.chat.completions.create(**fallback_kw)
+        latency_ms = round((time.perf_counter() - started) * 1000.0, 1)
+        out = self._to_internal_response(response)
+        out.usage["latency_ms"] = latency_ms
+        if on_reasoning is not None:
+            for r in out.reasoning_blocks:
+                on_reasoning(r)
+        return out
 
     def _chat_streaming(
         self,
         kwargs: dict[str, Any],
         on_text: "Callable[[str], None]",
+        *,
+        on_reasoning: "Callable[[str], None] | None" = None,
     ) -> LLMResponse:
         """Stream chunks, forward text deltas, and reassemble an LLMResponse.
 
@@ -114,30 +145,41 @@ class OpenAICompatClient(LLMClient):
         # accurate telemetry, others simply omit it.
         stream_kwargs["stream_options"] = {"include_usage": True}
 
+        started = time.perf_counter()
+        ttft_ms: float | None = None
         text_acc = ""
+        reasoning_acc = ""
         # index -> {"id", "name", "args"}
         tool_acc: dict[int, dict[str, str]] = {}
-        usage: dict[str, int] = {}
+        usage: dict[str, Any] = {}
         finish = ""
 
         for chunk in self._client.chat.completions.create(**stream_kwargs):
             usage_obj = getattr(chunk, "usage", None)
             if usage_obj is not None:
-                usage = {
-                    "input_tokens": int(getattr(usage_obj, "prompt_tokens", 0) or 0),
-                    "output_tokens": int(getattr(usage_obj, "completion_tokens", 0) or 0),
-                }
+                usage = self._extract_usage(usage_obj)
             choices = getattr(chunk, "choices", None) or []
             if not choices:
                 continue
             choice = choices[0]
             delta = getattr(choice, "delta", None)
             if delta is not None:
+                reasoning = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
+                if isinstance(reasoning, str) and reasoning:
+                    if ttft_ms is None:
+                        ttft_ms = round((time.perf_counter() - started) * 1000.0, 1)
+                    reasoning_acc += reasoning
+                    if on_reasoning is not None:
+                        on_reasoning(reasoning)
                 content = getattr(delta, "content", None)
                 if content:
+                    if ttft_ms is None:
+                        ttft_ms = round((time.perf_counter() - started) * 1000.0, 1)
                     text_acc += content
                     on_text(content)
                 for tc in (getattr(delta, "tool_calls", None) or []):
+                    if ttft_ms is None:
+                        ttft_ms = round((time.perf_counter() - started) * 1000.0, 1)
                     idx = getattr(tc, "index", 0) or 0
                     slot = tool_acc.setdefault(idx, {"id": "", "name": "", "args": ""})
                     if getattr(tc, "id", None):
@@ -151,14 +193,40 @@ class OpenAICompatClient(LLMClient):
             if getattr(choice, "finish_reason", None):
                 finish = choice.finish_reason
 
-        return self._assemble_streamed(text_acc, tool_acc, usage, finish)
+        usage["latency_ms"] = round((time.perf_counter() - started) * 1000.0, 1)
+        if ttft_ms is not None:
+            usage["ttft_ms"] = ttft_ms
+        return self._assemble_streamed(text_acc, tool_acc, usage, finish, reasoning=reasoning_acc)
+
+    @staticmethod
+    def _extract_usage(usage_obj: Any) -> dict[str, Any]:
+        usage: dict[str, Any] = {
+            "input_tokens": int(getattr(usage_obj, "prompt_tokens", 0) or 0),
+            "output_tokens": int(getattr(usage_obj, "completion_tokens", 0) or 0),
+        }
+        details = getattr(usage_obj, "prompt_tokens_details", None)
+        cached = 0
+        if details is not None:
+            cached = int(getattr(details, "cached_tokens", 0) or (
+                details.get("cached_tokens", 0) if isinstance(details, dict) else 0
+            ) or 0)
+        if not cached:
+            cached = int(getattr(usage_obj, "cache_read_input_tokens", 0) or 0)
+        if cached:
+            usage["cache_read_tokens"] = cached
+        cache_write = int(getattr(usage_obj, "cache_creation_input_tokens", 0) or 0)
+        if cache_write:
+            usage["cache_write_tokens"] = cache_write
+        return usage
 
     @staticmethod
     def _assemble_streamed(
         text: str,
         tool_acc: dict[int, dict[str, str]],
-        usage: dict[str, int],
+        usage: dict[str, Any],
         finish: str,
+        *,
+        reasoning: str = "",
     ) -> LLMResponse:
         text_blocks: list[str] = []
         tool_calls: list[ToolCall] = []
@@ -197,6 +265,7 @@ class OpenAICompatClient(LLMClient):
             raw_content=raw,
             stop_reason=stop_reason,
             usage=usage,
+            reasoning_blocks=[reasoning] if reasoning else [],
         )
 
     # ---------- inbound translation ----------
@@ -306,9 +375,10 @@ class OpenAICompatClient(LLMClient):
 
     # ---------- outbound translation ----------
 
-    @staticmethod
-    def _to_internal_response(response: Any) -> LLMResponse:
+    @classmethod
+    def _to_internal_response(cls, response: Any) -> LLMResponse:
         text_blocks: list[str] = []
+        reasoning_blocks: list[str] = []
         tool_calls: list[ToolCall] = []
         raw: list[dict[str, Any]] = []
 
@@ -316,6 +386,9 @@ class OpenAICompatClient(LLMClient):
         message = getattr(choice, "message", None) if choice else None
 
         if message is not None:
+            reasoning = getattr(message, "reasoning_content", None) or getattr(message, "reasoning", None)
+            if isinstance(reasoning, str) and reasoning:
+                reasoning_blocks.append(reasoning)
             content = getattr(message, "content", None)
             if content:
                 text_blocks.append(content)
@@ -343,12 +416,7 @@ class OpenAICompatClient(LLMClient):
                 })
 
         usage_obj = getattr(response, "usage", None)
-        usage: dict[str, int] = {}
-        if usage_obj is not None:
-            usage = {
-                "input_tokens": int(getattr(usage_obj, "prompt_tokens", 0) or 0),
-                "output_tokens": int(getattr(usage_obj, "completion_tokens", 0) or 0),
-            }
+        usage: dict[str, Any] = cls._extract_usage(usage_obj) if usage_obj is not None else {}
 
         finish = getattr(choice, "finish_reason", "") if choice else ""
         # Map OpenAI finish reasons onto Anthropic-shaped names so callers can
@@ -365,4 +433,5 @@ class OpenAICompatClient(LLMClient):
             raw_content=raw,
             stop_reason=stop_reason,
             usage=usage,
+            reasoning_blocks=reasoning_blocks,
         )

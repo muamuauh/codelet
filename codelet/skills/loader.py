@@ -34,6 +34,9 @@ class Skill:
     triggers: tuple[str, ...] = ()
     allowed_tools: tuple[str, ...] | None = None
     source: Path | None = None
+    plugin: str | None = None        # owning plugin name (if bundled or attached via frontmatter)
+    category: str = ""               # optional UI grouping tag (e.g. review, testing, docs)
+    scope: str = "standalone"        # plugin | project | global | standalone
 
 
 @dataclass
@@ -45,6 +48,15 @@ class SkillIndex:
         # Project-local registration happens after user-global, so a later
         # add() with the same name overrides cleanly.
         self.skills[skill.name] = skill
+
+    def remove(self, name: str) -> None:
+        self.skills.pop(name, None)
+
+    def remove_by_plugin(self, plugin_name: str) -> list[str]:
+        removed = [k for k, s in self.skills.items() if s.plugin == plugin_name]
+        for k in removed:
+            self.skills.pop(k, None)
+        return removed
 
     def get(self, name: str) -> Skill | None:
         return self.skills.get(name)
@@ -70,7 +82,12 @@ class SkillIndex:
         return "\n".join(lines)
 
 
-def parse_skill_file(path: Path) -> Skill | None:
+def parse_skill_file(
+    path: Path,
+    *,
+    scope: str = "standalone",
+    plugin: str | None = None,
+) -> Skill | None:
     """Parse a single skill markdown file. Returns None on malformed input."""
     try:
         text = path.read_text(encoding="utf-8")
@@ -107,6 +124,12 @@ def parse_skill_file(path: Path) -> Skill | None:
     if allowed_tools is not None and isinstance(allowed_tools, str):
         allowed_tools = [allowed_tools]
 
+    fm_plugin = fm.get("plugin")
+    resolved_plugin = plugin or (str(fm_plugin).strip() if isinstance(fm_plugin, str) and fm_plugin.strip() else None)
+    fm_category = fm.get("category")
+    category = str(fm_category).strip() if isinstance(fm_category, str) else ""
+    resolved_scope = "plugin" if plugin else scope
+
     return Skill(
         name=name.strip(),
         description=description.strip(),
@@ -114,16 +137,50 @@ def parse_skill_file(path: Path) -> Skill | None:
         triggers=tuple(str(t) for t in triggers),
         allowed_tools=tuple(str(t) for t in allowed_tools) if allowed_tools else None,
         source=path,
+        plugin=resolved_plugin,
+        category=category,
+        scope=resolved_scope,
     )
+
+
+def iter_skill_files(directory: Path) -> list[Path]:
+    """Return every skill markdown file inside `directory`.
+
+    Supports both:
+      - Flat single-file skills: `<directory>/<name>.md`
+      - Standard directory-bundled skills: `<directory>/<name>/SKILL.md`
+    """
+    if not directory.is_dir():
+        return []
+    found: list[Path] = []
+    for entry in sorted(directory.iterdir()):
+        if entry.name.startswith(".") or entry.name.startswith("_"):
+            continue
+        if entry.is_file() and entry.suffix.lower() == ".md":
+            found.append(entry)
+        elif entry.is_dir():
+            for cand_name in ("SKILL.md", "skill.md"):
+                cand = entry / cand_name
+                if cand.is_file():
+                    found.append(cand)
+                    break
+    return found
+
+
+def builtin_skills_dir() -> Path:
+    return Path(__file__).resolve().parent / "builtin"
 
 
 def load_skills(
     project_dir: str | Path | None = None,
     user_dir: str | Path | None = None,
+    *,
+    include_builtin: bool = True,
 ) -> SkillIndex:
-    """Load skills from user-global then project-local locations.
+    """Load skills from built-in, user-global, then project-local locations.
 
-    Project-local entries override user-global entries with the same name.
+    Later layers override earlier ones with the same skill name.
+    Supports both flat `*.md` files and `<skill-dir>/SKILL.md` bundles.
     """
     index = SkillIndex()
 
@@ -138,11 +195,14 @@ def load_skills(
         project_dir = Path(project_dir)
     project_skills = project_dir / ".codelet" / "skills"
 
-    for directory in (user_dir, project_skills):
-        if not directory.is_dir():
-            continue
-        for md in sorted(directory.glob("*.md")):
-            skill = parse_skill_file(md)
+    layers: list[tuple[str, Path]] = []
+    if include_builtin:
+        layers.append(("builtin", builtin_skills_dir()))
+    layers.extend([("global", user_dir), ("project", project_skills)])
+
+    for scope_name, directory in layers:
+        for md in iter_skill_files(directory):
+            skill = parse_skill_file(md, scope=scope_name)
             if skill is not None:
                 index.add(skill)
 

@@ -3,44 +3,52 @@
 ## 状态：已实现
 
 已建成（`codelet/plugins/`）：`register_tool`（同名注册会覆盖核心工具）、
+`register_skill` / `register_skills_dir`（捆绑随插件热插拔的 Skill）、
 `add_system_prompt_section`、`on_user_prompt`（prompt 中间件）、`wrap_tool`
 （异步的工具执行中间件）、`register_command`（`/name` 斜杠命令，返回一行状态字符串，
 CLI 与 Web GUI 都已接好），以及 `ctx.host`（指向运行中的 `AgentLoop`，供需要在会话中途
 改动系统的插件使用）。
 
-发现渠道是 entry points（`codelet.plugins`）+ `./.codelet/plugins/*.py` +
-`~/.codelet/plugins/*.py`，由 settings.json 里的 `plugins` 块筛选与排序；任何插件出错都被
-隔离，不会拖垮 agent。**子 agent 会继承**父级的 tool/prompt 中间件、system-prompt 段和命令
+发现渠道是 entry points（`codelet.plugins`）+ `./.codelet/plugins/` + `~/.codelet/plugins/`
+（同时支持单文件 `*.py` 与目录型功能包 `<name>/plugin.py` + `skills/*.md`，即使只放 `skills/*.md`
+也会被自动识别为零代码的纯技能包插件），由 settings.json 里的 `plugins` 块筛选与排序；任何插件
+出错都被隔离，不会拖垮 agent。**子 agent 会继承**父级的 tool/prompt 中间件、system-prompt 段和命令
 （插件注册的工具则通过复制的 registry 一并带过去）。
 
 尚未实现：provider 注册（`register_provider`）与插件的 `shutdown` 生命周期钩子。
 
 ### 内置插件（随 codelet 发布，但只在显式启用时加载）
 
-`codelet/plugins/builtin/` 下有五个参考实现。它们**绝不会被自动发现** —— 必须在
-settings.json 里点名启用：
+`codelet/plugins/builtin/` 下有六个参考实现（其中 `cockpit` 在项目 `.codelet/settings.json` 中默认启用）。它们**绝不会被自动发现** —— 必须在 settings.json 里点名启用：
 
 ```json
-{"plugins": {"enabled": ["sandbox", "rag", "evolve", "memory", "router"],
-             "config": {"sandbox": {"image": "python:3.12-slim", "network": false},
+{"plugins": {"enabled": ["cockpit", "sandbox", "rag", "evolve", "memory", "router"],
+             "config": {"cockpit": {"balance_ttl_seconds": 300},
+                        "sandbox": {"image": "python:3.12-slim", "network": false},
                         "rag": {"inject": false, "top_k": 3},
                         "evolve": {"dir": ".codelet/evolved"},
                         "memory": {"dir": ".codelet/memory", "user_dir": "~/.codelet/memory"},
                         "router": {"llm": false}}}}
 ```
 
+- **cockpit** —— 实时可观测与按量余额插件（默认启用）：提供只读工具 `cockpit_status`、配套技能 `session-diagnostics` 与 `/cockpit` 命令；驱动 Web 右侧 Cockpit 面板展示上下文 5 段环形占用、缓存命中率、TTFT/P95/tok/s 24 轮趋势、跨会话本地消费统计（`~/.codelet/cockpit_usage.jsonl`）以及 ZenMux PAYG 实时账户余额（配置可选的 `ZENMUX_MANAGEMENT_API_KEY` 时自动查询 `GET {base_url}/management/payg/balance`，未配置时优雅降级为本地消费看板）。
 - **sandbox** —— 新增一个**独立的** `sandbox` 工具，每条命令都在一次性 Docker 容器里执行，
   工作区挂载到 `/workspace`，默认无网络。核心的 `bash`（宿主机）原样保留，由模型按命令自行
   选择用哪个。真正的容器级隔离；需要 Docker；每次调用都是全新容器（有依赖关系的步骤请用
   `&&` 串起来）。
 - **rag** —— 提供 `search_docs(query, k)` 工具（对工作区文件分块做 BM25，纯 Python，不调用任何
-  embedding API）、`/rag` 命令（重建索引并报告统计），以及在 `"inject": true` 时启用的 prompt
+  embedding API）、配套技能 `workspace-research`、`/rag` 命令（重建索引并报告统计），以及在 `"inject": true` 时启用的 prompt
   中间件（把最相关的片段拼到每条消息前）。工作区切换时索引会自动重建。
 - **evolve** —— 自进化：提供 `create_tool` 元工具，让 agent 在对话中途自己写一个新工具并热加载
   进当前会话。见下方[自进化](#自进化agent-自己长出工具)。
-- **memory** —— 跨会话记忆：提供 `memory` 工具（view / write / delete）和 `/memory` 命令，把记忆的
+- **memory** —— 跨会话记忆：提供 `memory` 工具（view / write / delete）、配套技能 `memory-hygiene` 和 `/memory` 命令，把记忆的
   索引放进系统提示词。见下方[记忆](#记忆下一次会话该知道的少量事实)。
 - **router** —— 意图路由：把「只是在问」的一轮设成只读。见下方[意图路由](#意图路由只是在问的时候不改文件)。
+
+## 两层能力集架构（Plugins · Packs / Base Capabilities）
+
+- **底层原子能力层（Tools & Skills）**：内核工具、独立 Skill（支持 `*.md` 与 `<name>/SKILL.md`）以及内置 `skill-creator`；用户可直接通过 `install_skill` 或 `/install <github-url>` 安装新 Skill 并自动热重载。
+- **上层插件打包层（Plugins）**：将一组相关的 `Tools + Skills + Commands + Middleware` 打包为可热插拔的功能包。独立 Skill 也可通过在 frontmatter 中写 `plugin: <name>` 挂靠到指定插件，随该插件启停；不写归属字段的新安装 Skill 默认归入 `Standalone · Project` 或 `Standalone · Global`（支持可选 `category:` 标签）。
 
 ## 自进化：Agent 自己长出工具
 

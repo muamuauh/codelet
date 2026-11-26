@@ -67,7 +67,7 @@
     "UserPromptSubmit": []
   },
   "plugins": {
-    "enabled": ["rag", "sandbox", "evolve"],
+    "enabled": ["rag", "sandbox", "evolve", "cockpit"],
     "config": {
       "sandbox": {"image": "python:3.12-slim", "network": false},
       "rag": {"inject": false, "top_k": 3},

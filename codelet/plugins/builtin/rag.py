@@ -173,6 +173,19 @@ class RagPlugin:
     def setup(self, ctx: PluginContext) -> None:
         self._cfg = ctx.config or {}
         ctx.register_tool(SearchDocsTool(self))
+        ctx.register_skill(
+            name="workspace-research",
+            description="Locate relevant code and docs via BM25 search_docs before reading full files",
+            category="search",
+            triggers=("find", "search", "locate", "docs", "architecture"),
+            allowed_tools=("search_docs", "read_file", "grep"),
+            body=(
+                "# Workspace Research Procedure\n\n"
+                "1. Start with `search_docs` using concise domain keywords to retrieve top matching chunks.\n"
+                "2. Read only the relevant line ranges with `read_file` rather than dumping whole large files.\n"
+                "3. Cross-check symbols with `grep` when exact call-sites matter."
+            ),
+        )
         ctx.register_command("rag", self._cmd)
         ctx.add_system_prompt_section(
             "A `search_docs` tool is available: BM25 retrieval over this workspace's "

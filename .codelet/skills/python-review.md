@@ -1,6 +1,7 @@
 ---
 name: python-review
 description: Audit Python files for unused imports, TODO comments, and obvious lint issues
+category: review
 triggers: [review, lint, python]
 allowed_tools: [glob, grep, read_file]
 ---

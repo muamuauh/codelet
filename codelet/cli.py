@@ -13,6 +13,7 @@ from rich.table import Table
 
 from .agent_loop import AgentLoop, PromptBlocked
 from .config import Config, LLMProvider, PermissionMode
+from .llm.models import ModelCatalog, resolve_ttl_seconds
 from .persistence.session import (
     SessionStore,
     list_project_sessions,
@@ -35,10 +36,18 @@ Built-in commands:
   [yellow]/todos[/yellow]          show the current todo list
   [yellow]/usage[/yellow]          show telemetry panel
   [yellow]/profile[/yellow]        show active provider/model/base_url
+  [yellow]/models[/yellow] [q|refresh] list or refresh available models from the endpoint
+  [yellow]/model[/yellow] <id>     switch active model in this session
   [yellow]/sessions[/yellow]       list saved sessions
   [yellow]/resume[/yellow] <id>    restore a session into the running agent
   [yellow]/save[/yellow]           write a session snapshot to disk
-  [yellow]/mode[/yellow] [m]       show or change permission mode (ask|auto|plan)
+  [yellow]/mode[/yellow] [m]       show or change mode (normal|ask|plan|auto)
+  [yellow]/btw[/yellow] <q>        side question without polluting main context
+  [yellow]/compact[/yellow] [note] manually compact conversation context
+  [yellow]/clear[/yellow]          clear messages and start fresh
+  [yellow]/plan[/yellow] [task]    switch to plan mode (and optionally plan a task)
+  [yellow]/diff[/yellow]           show git status & diff summary
+  [yellow]/export[/yellow]         export conversation to Markdown
   [yellow]/help[/yellow]           show this banner
   [yellow]/quit[/yellow]           exit
 """
@@ -59,7 +68,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--base-url", default=None, help="Override profile's base URL.")
     p.add_argument("--api-key", default=None,
                    help="Override resolved API key (else read from env via .env / shell).")
-    p.add_argument("--mode", choices=["ask", "auto", "plan"], default=None)
+    p.add_argument("--mode", choices=["normal", "ask", "auto", "plan"], default=None)
+    p.add_argument("--effort", choices=["auto", "off", "low", "medium", "high"], default=None,
+                   help="Thinking / reasoning effort (auto|off|low|medium|high).")
     p.add_argument("--max-turns", type=int, default=None)
     p.add_argument("--no-telemetry", action="store_true", help="Suppress the per-turn usage panel.")
     p.add_argument("--no-stream", action="store_true",
@@ -95,6 +106,10 @@ def _build_config(args: argparse.Namespace, settings: dict[str, Any]) -> Config:
             cfg.permission_mode = PermissionMode(settings["permission_mode"])
         except ValueError:
             pass
+    if "reasoning_effort" in settings:
+        eff_val = str(settings["reasoning_effort"]).strip().lower()
+        if eff_val in ("auto", "off", "low", "medium", "high"):
+            cfg.reasoning_effort = eff_val
     for key in ("max_turns", "max_tokens", "context_window", "compact_keep_recent",
                 "compact_summary_target_tokens", "compact_clear_min_chars",
                 "max_output_chars", "max_context_messages"):
@@ -147,6 +162,10 @@ def _build_config(args: argparse.Namespace, settings: dict[str, Any]) -> Config:
         cfg.api_key = args.api_key
     if args.mode is not None:
         cfg.permission_mode = PermissionMode(args.mode)
+    if getattr(args, "effort", None) is not None:
+        eff_arg = str(args.effort).strip().lower()
+        if eff_arg in ("auto", "off", "low", "medium", "high"):
+            cfg.reasoning_effort = eff_arg
     if args.max_turns is not None:
         cfg.max_turns = args.max_turns
     if getattr(args, "no_stream", False):
@@ -162,6 +181,19 @@ def _build_config(args: argparse.Namespace, settings: dict[str, Any]) -> Config:
         # compatible endpoint (DeepSeek, Moonshot, ...) may not serve -- every
         # compaction would then fail and be skipped. Its own model always exists.
         cfg.compact_model = cfg.model
+
+    # ---- merge cached model catalog metadata (disk-only, zero startup latency) ----
+    cached = ModelCatalog(ttl_seconds=resolve_ttl_seconds(settings)).get_cached(
+        cfg.base_url, provider=cfg.provider.value
+    )
+    if cached.models:
+        merged_pricing = cached.pricing_map()
+        merged_pricing.update(cfg.pricing_overrides)
+        cfg.pricing_overrides = merged_pricing
+        if not profile.get("context_window") and "context_window" not in settings:
+            info = cached.get(cfg.model)
+            if info and info.context_length:
+                cfg.context_window = info.context_length
 
     return cfg
 
@@ -260,6 +292,82 @@ def _print_sessions(console: Console, *, project_limit: int = 15, global_limit: 
     console.print("\n[dim]Resume any with /resume <id>[/dim]")
 
 
+def _fmt_ctx(n: int | None) -> str:
+    if not n:
+        return "—"
+    if n >= 1_000_000:
+        v = n / 1_000_000
+        return f"{v:.0f}M" if v.is_integer() else f"{v:.1f}M"
+    if n >= 1_000:
+        return f"{round(n / 1_000)}K"
+    return str(n)
+
+
+def _fmt_price(pricing: dict[str, float] | None) -> str:
+    if not pricing:
+        return "—"
+    def _num(x: float) -> str:
+        return f"{x:g}"
+    return f"${_num(pricing['input'])} / ${_num(pricing['output'])}"
+
+
+def _print_models(agent: AgentLoop, console: Console, arg: str) -> None:
+    c = agent.config
+    force = arg.lower() in ("refresh", "--refresh", "-r")
+    query = "" if force else arg.lower()
+    catalog = ModelCatalog(ttl_seconds=resolve_ttl_seconds())
+    snap = catalog.refresh(c.base_url, c.api_key, provider=c.provider.value, force=force)
+    if snap.models:
+        # Merge catalog pricing without overwriting explicit settings overrides.
+        merged = snap.pricing_map()
+        merged.update(c.pricing_overrides)
+        agent.telemetry.update_pricing(merged)
+
+    if snap.error:
+        console.print(f"[yellow]Model refresh warning:[/yellow] {snap.error}")
+
+    models = snap.models
+    if query:
+        models = [
+            m for m in models
+            if query in m.id.lower()
+            or query in m.display_name.lower()
+            or query in m.owned_by.lower()
+        ]
+
+    if not models:
+        console.print("[dim]No matching models in catalog. Check LLM_BASE_URL or try /models refresh.[/dim]")
+        return
+
+    updated = (
+        datetime.fromtimestamp(snap.fetched_at).strftime("%Y-%m-%d %H:%M")
+        if snap.fetched_at else "unknown"
+    )
+    limit = 40
+    table = Table(
+        title=f"Models ({len(models)} shown/{len(snap.models)} total · {snap.source} · {updated})",
+        title_justify="left", header_style="bold", show_edge=False, pad_edge=False,
+    )
+    table.add_column("", width=2)
+    table.add_column("Model ID", style="cyan", no_wrap=True)
+    table.add_column("Ctx", justify="right", style="dim")
+    table.add_column("$/1M (in/out)", justify="right", style="dim")
+    table.add_column("Caps", style="dim")
+    for m in models[:limit]:
+        mark = "*" if m.id == c.model else ""
+        caps = []
+        if m.vision:
+            caps.append("vision")
+        if m.reasoning:
+            caps.append("reasoning")
+        table.add_row(mark, m.id, _fmt_ctx(m.context_length), _fmt_price(m.pricing), ", ".join(caps) or "—")
+    console.print()
+    console.print(table)
+    if len(models) > limit:
+        console.print(f"[dim]… {len(models) - limit} more models omitted; filter with /models <keyword>[/dim]")
+    console.print("[dim]Switch with /model <id> · Force update with /models refresh[/dim]")
+
+
 def _handle_slash(
     line: str,
     agent: AgentLoop,
@@ -339,6 +447,28 @@ def _handle_slash(
         console.print(f"  [cyan]api_key[/cyan]   {'set' if c.api_key else '[red]MISSING[/red]'}")
         return True, None
 
+    if cmd == "/models":
+        _print_models(agent, console, rest.strip())
+        return True, None
+
+    if cmd == "/model":
+        target = rest.strip()
+        if not target:
+            console.print(f"Current model: [cyan]{agent.config.model}[/cyan]")
+            console.print("Usage: /model <model-id>  (run /models to list available models)")
+            return True, None
+        agent.config.model = target
+        cached = ModelCatalog().get_cached(agent.config.base_url, provider=agent.config.provider.value)
+        info = cached.get(target)
+        if info:
+            if info.context_length:
+                agent.config.context_window = info.context_length
+            if info.pricing and target not in agent.config.pricing_overrides:
+                agent.telemetry.update_pricing({target: info.pricing})
+        agent.rebuild_system_prompt()
+        console.print(f"Model -> [cyan]{target}[/cyan]")
+        return True, None
+
     if cmd == "/sessions":
         _print_sessions(console)
         return True, None
@@ -374,12 +504,114 @@ def _handle_slash(
 
     if cmd == "/mode":
         parts2 = line.split()
-        if len(parts2) > 1 and parts2[1] in ("ask", "auto", "plan"):
+        if len(parts2) > 1 and parts2[1] in ("normal", "ask", "auto", "plan"):
             agent.config.permission_mode = PermissionMode(parts2[1])
+            agent.rebuild_system_prompt()
             console.print(f"Mode -> [yellow]{parts2[1]}[/yellow]")
         else:
             console.print(f"Current mode: [yellow]{agent.config.permission_mode.value}[/yellow]")
-            console.print("Usage: /mode [ask|auto|plan]")
+            console.print("Usage: /mode [normal|ask|plan|auto]")
+        return True, None
+
+    if cmd == "/effort":
+        parts2 = line.split()
+        if len(parts2) > 1 and parts2[1].lower() in ("auto", "off", "low", "medium", "high"):
+            agent.config.reasoning_effort = parts2[1].lower()
+            console.print(f"Thinking effort -> [yellow]{agent.config.reasoning_effort}[/yellow]")
+        else:
+            console.print(f"Current thinking effort: [yellow]{agent.config.reasoning_effort}[/yellow]")
+            console.print("Usage: /effort [auto|off|low|medium|high]")
+        return True, None
+
+    if cmd == "/install":
+        from .skills.installer import fetch_remote_skill, install_fetched_skill, parse_install_args
+
+        parsed = parse_install_args(rest)
+        if not parsed["url"]:
+            console.print("Usage: /install <github-url> [--global] [--plugin <pack>] [--category <cat>] [--overwrite]")
+            return True, None
+        try:
+            fetched = fetch_remote_skill(parsed["url"])
+            res = install_fetched_skill(
+                fetched,
+                scope=parsed["scope"],
+                plugin=parsed["plugin"],
+                category=parsed["category"],
+                name=parsed["name"],
+                overwrite=parsed["overwrite"],
+            )
+            agent.reload_skills()
+            console.print(f"[green]Installed skill[/green] [cyan]{res.name}[/cyan] -> {res.target_path}")
+            for w in res.warnings:
+                console.print(f"  [yellow]! {w}[/yellow]")
+        except Exception as exc:
+            console.print(f"[red]Install failed:[/red] {exc}")
+        return True, None
+
+    if cmd == "/btw":
+        q = rest.strip()
+        if not q:
+            console.print("[red]Usage:[/red] /btw <side question>")
+            return True, None
+        import asyncio
+        try:
+            ans = asyncio.run(agent.ask_btw(q))
+            console.print(Panel(ans or "(empty)", title="btw (isolated)", border_style="magenta", expand=False))
+        except Exception as exc:
+            console.print(f"[red]/btw failed:[/red] {exc}")
+        return True, None
+
+    if cmd == "/compact":
+        import asyncio
+        try:
+            res = asyncio.run(agent.compact_now(focus=rest.strip()))
+            if res["compacted"]:
+                console.print(
+                    f"[green]Compacted:[/green] {res['before_tokens']:,} -> {res['after_tokens']:,} tok "
+                    f"({res['before_messages']} -> {res['after_messages']} msgs)"
+                )
+            else:
+                console.print("[dim]Nothing to compact yet (conversation is short).[/dim]")
+        except Exception as exc:
+            console.print(f"[red]Compaction failed:[/red] {exc}")
+        return True, None
+
+    if cmd in ("/clear", "/new"):
+        agent.context.messages.clear()
+        agent.context._anchor = None
+        agent.todo_store.replace([])
+        console.print("[green]Conversation cleared.[/green]")
+        return True, None
+
+    if cmd == "/plan":
+        agent.config.permission_mode = PermissionMode.PLAN
+        agent.rebuild_system_prompt()
+        console.print("Mode -> [yellow]plan[/yellow]")
+        if rest.strip():
+            return True, rest.strip()
+        return True, None
+
+    if cmd == "/diff":
+        import subprocess
+        try:
+            st = subprocess.run(["git", "status", "-sb"], capture_output=True, text=True, timeout=5)
+            df = subprocess.run(["git", "diff", "--stat"], capture_output=True, text=True, timeout=5)
+            out = (st.stdout + "\n" + df.stdout).strip()
+            console.print(out or "[dim](clean working tree)[/dim]")
+        except Exception as exc:
+            console.print(f"[yellow]git diff unavailable:[/yellow] {exc}")
+        return True, None
+
+    if cmd == "/cost":
+        console.print()
+        console.print(agent.telemetry.render_panel())
+        return True, None
+
+    if cmd == "/export":
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        dest = Path.cwd() / f"codelet-{stamp}.md"
+        dest.write_text(agent.export_markdown(), encoding="utf-8")
+        console.print(f"[green]Exported conversation to[/green] {dest}")
         return True, None
 
     if cmd == "/help":
