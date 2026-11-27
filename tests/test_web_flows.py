@@ -44,6 +44,7 @@ class _Stub(LLMClient):
 def _client(monkeypatch, tmp_path, script: list[LLMResponse]) -> TestClient:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(agent_loop, "build_client", lambda config: _Stub(script))
+    monkeypatch.setattr("codelet.web.server._workspace_states_file", lambda: tmp_path / "workspace_states.json")
     from codelet.llm.models import ModelCatalog
     from codelet.web.server import create_app
     return TestClient(create_app(

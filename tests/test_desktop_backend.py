@@ -492,12 +492,18 @@ def test_persists_selected_model_and_thinking_effort(tmp_path, monkeypatch):
         assert p2["type"] == "profile" and p2["reasoning_effort"] == "high"
         assert ws.receive_json()["type"] == "cockpit"
 
-    # Reconnect in ws_a -> must remember both model and reasoning_effort
+        ws.send_json({"type": "set_mode", "mode": "auto"})
+        p3 = ws.receive_json()
+        assert p3["type"] == "profile" and p3["mode"] == "auto"
+        assert ws.receive_json()["type"] == "cockpit"
+
+    # Reconnect in ws_a -> must remember model, reasoning_effort, and execution mode
     with client.websocket_connect("/ws") as ws:
         first = ws.receive_json()
         assert first["type"] == "profile"
         assert first["model"] == "anthropic/claude-opus-4.5"
         assert first["reasoning_effort"] == "high"
+        assert first["mode"] == "auto"
 
     # Brand new ws_b inherits the last-used defaults, and can override independently
     monkeypatch.chdir(ws_b)
@@ -506,6 +512,7 @@ def test_persists_selected_model_and_thinking_effort(tmp_path, monkeypatch):
         assert first_b["type"] == "profile"
         assert first_b["model"] == "anthropic/claude-opus-4.5"
         assert first_b["reasoning_effort"] == "high"
+        assert first_b["mode"] == "auto"
         for _ in range(7):
             ws.receive_json()
         ws.send_json({"type": "set_model", "model": "deepseek/deepseek-v4"})
@@ -514,14 +521,18 @@ def test_persists_selected_model_and_thinking_effort(tmp_path, monkeypatch):
         ws.send_json({"type": "set_effort", "effort": "low"})
         ws.receive_json()
         ws.receive_json()
+        ws.send_json({"type": "set_mode", "mode": "plan"})
+        ws.receive_json()
+        ws.receive_json()
 
-    # Returning to ws_a still restores ws_a's own remembered model & effort
+    # Returning to ws_a still restores ws_a's own remembered model, effort & mode
     monkeypatch.chdir(ws_a)
     with client.websocket_connect("/ws") as ws:
         first_a2 = ws.receive_json()
         assert first_a2["type"] == "profile"
         assert first_a2["model"] == "anthropic/claude-opus-4.5"
         assert first_a2["reasoning_effort"] == "high"
+        assert first_a2["mode"] == "auto"
 
 
 def test_transcript_groups_multi_step_tools_and_thinking_before_final_answer():

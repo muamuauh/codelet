@@ -444,7 +444,7 @@ class Connection:
         self._btw_history: list[dict[str, str]] = []
         # State that survives an agent rebuild (new chat / workspace switch).
         self.model: str | None = None      # None -> restore workspace/default pref or .env/profile default
-        self.mode = "ask"
+        self.mode: str | None = None       # None -> restore workspace/default pref or "ask"
         self.effort: str | None = None     # None -> restore workspace/default pref or "auto"
         self.workspace = os.getcwd()
         self.store: SessionStore | None = None
@@ -456,7 +456,7 @@ class Connection:
 
     def _build(self) -> None:
         """(Re)build the agent + session store in the current working directory,
-        preserving or restoring per-workspace model/effort/plugin/tool/skill states."""
+        preserving or restoring per-workspace model/mode/effort/plugin/tool/skill states."""
         ws_state = _load_workspace_state(self.workspace)
         global_defaults = _load_workspace_state("__defaults__")
         self._ws_ui_state = dict(ws_state.get("ui") or {})
@@ -478,6 +478,18 @@ class Connection:
         else:
             resolved_model = None
 
+        valid_modes = ("normal", "ask", "plan", "auto")
+        saved_mode = str(ws_state.get("mode") or "").strip().lower()
+        default_mode = str(global_defaults.get("mode") or "").strip().lower()
+        if saved_mode in valid_modes:
+            resolved_mode = saved_mode
+        elif self.mode in valid_modes:
+            resolved_mode = self.mode
+        elif default_mode in valid_modes:
+            resolved_mode = default_mode
+        else:
+            resolved_mode = "ask"
+
         valid_efforts = ("auto", "off", "low", "medium", "high")
         saved_effort = str(ws_state.get("reasoning_effort") or "").strip().lower()
         default_effort = str(global_defaults.get("reasoning_effort") or "").strip().lower()
@@ -491,7 +503,7 @@ class Connection:
             resolved_effort = "auto"
 
         ns = SimpleNamespace(profile=None, provider=None, model=resolved_model, base_url=None,
-                             api_key=None, mode=self.mode, effort=resolved_effort, max_turns=None, no_stream=False)
+                             api_key=None, mode=resolved_mode, effort=resolved_effort, max_turns=None, no_stream=False)
         config = _build_config(ns, self.settings)
         # Remember the resolved default so the model dropdown can show it.
         self.model = config.model
@@ -994,9 +1006,12 @@ class Connection:
         self.agent.rebuild_system_prompt()
 
     def _set_mode(self, mode: str) -> None:
+        mode = (mode or "").strip().lower()
         if mode in ("normal", "ask", "auto", "plan"):
             self.mode = mode
             self.agent.config.permission_mode = PermissionMode(mode)
+            _save_workspace_state(self.workspace, {"mode": mode})
+            _save_workspace_state("__defaults__", {"mode": mode})
             self._refresh_system_prompt()
             self.send({"type": "profile", **self._profile_data()})
             self.send({"type": "cockpit", **self._cockpit_snapshot()})
