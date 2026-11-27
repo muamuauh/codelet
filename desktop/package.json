@@ -11,8 +11,11 @@
     "dev": "electron .",
     "icons": "python scripts/gen-icons.py",
     "build:backend": "pyinstaller --distpath backend-dist --workpath build/pyi -y scripts/codelet-backend.spec",
-    "build:electron": "electron-builder --win dir portable",
-    "dist": "electron-builder --win dir portable"
+    "build:electron": "electron-builder --win dir portable nsis --publish never",
+    "dist": "electron-builder --win dir portable nsis --publish never"
+  },
+  "dependencies": {
+    "electron-updater": "^6.3.9"
   },
   "devDependencies": {
     "electron": "^33.2.0",
@@ -23,6 +26,13 @@
     "productName": "codelet",
     "electronDist": "node_modules/electron/dist",
     "asar": true,
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "muamuauh",
+        "repo": "codelet"
+      }
+    ],
     "directories": {
       "output": "dist",
       "buildResources": "assets"
@@ -33,6 +43,7 @@
       "backend.js",
       "secrets.js",
       "tray.js",
+      "updater.js",
       "splash.html",
       "assets/**/*",
       "package.json"
@@ -48,11 +59,22 @@
       "signAndEditExecutable": false,
       "target": [
         "dir",
-        "portable"
+        "portable",
+        "nsis"
       ]
     },
     "portable": {
       "artifactName": "codelet-${version}-portable.exe"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "codelet",
+      "include": "scripts/installer.nsh",
+      "artifactName": "codelet-Setup-${version}.exe"
     }
   }
 }

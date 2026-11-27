@@ -7,6 +7,7 @@ const { app, BrowserWindow, dialog, ipcMain, screen, shell } = require("electron
 const { BackendManager } = require("./backend");
 const { SecretVault } = require("./secrets");
 const { createAppTray } = require("./tray");
+const { setupAutoUpdater, checkForUpdates } = require("./updater");
 
 const STATE_FILE = () => path.join(app.getPath("userData"), "desktop-state.json");
 const REPO_ROOT = path.resolve(__dirname, "..");
@@ -16,6 +17,22 @@ let tray = null;
 let backend = null;
 let vault = null;
 let backendOrigin = "";
+
+function extractWorkspaceArg(argv) {
+  if (!Array.isArray(argv)) return "";
+  const startIdx = app.isPackaged ? 1 : 2;
+  for (let i = startIdx; i < argv.length; i++) {
+    const raw = String(argv[i] || "").trim().replace(/^["']|["']$/g, "");
+    if (!raw || raw.startsWith("-") || raw === ".") continue;
+    try {
+      const resolved = path.resolve(raw);
+      if (fs.existsSync(resolved) && fs.statSync(resolved).isDirectory()) {
+        return resolved;
+      }
+    } catch (_) {}
+  }
+  return "";
+}
 let isQuitting = false;
 let trayTipShown = false;
 let currentWorkspace = "";
@@ -195,6 +212,7 @@ function registerIpc() {
   });
 
   ipcMain.handle("desktop:version", () => app.getVersion());
+  ipcMain.handle("desktop:check-updates", () => checkForUpdates(app, { manual: true }));
 
   ipcMain.handle("desktop:vault-info", () => {
     const available = vault ? vault.isAvailable() : false;
@@ -282,13 +300,16 @@ function createWindow() {
 
 async function bootBackendAndLoad() {
   const saved = loadState();
-  const initialWorkspace =
-    saved.lastWorkspace && fs.existsSync(saved.lastWorkspace)
+  const cliWorkspace = extractWorkspaceArg(process.argv);
+  const initialWorkspace = cliWorkspace
+    ? cliWorkspace
+    : saved.lastWorkspace && fs.existsSync(saved.lastWorkspace)
       ? saved.lastWorkspace
       : app.isPackaged
         ? os.homedir()
         : REPO_ROOT;
   currentWorkspace = initialWorkspace;
+  if (cliWorkspace) saveState({ lastWorkspace: cliWorkspace });
 
   backend = new BackendManager({
     isPackaged: app.isPackaged,
@@ -327,8 +348,14 @@ const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
 } else {
-  app.on("second-instance", () => {
+  app.on("second-instance", (_event, commandLine) => {
     showMainWindow();
+    const targetDir = extractWorkspaceArg(commandLine);
+    if (targetDir) {
+      currentWorkspace = targetDir;
+      saveState({ lastWorkspace: targetDir });
+      dispatchAction("open-workspace", { path: targetDir });
+    }
   });
 
   app.whenReady().then(async () => {
@@ -347,7 +374,23 @@ if (!gotLock) {
         shell.openPath(target);
       },
       onOpenSettings: () => dispatchAction("open-settings"),
+      onCheckUpdates: () => checkForUpdates(app, { manual: true }),
       onQuit: () => quitApp(),
+    });
+
+    setupAutoUpdater({
+      app,
+      getMainWindow: () => mainWindow,
+      beforeQuitAndInstall: async () => {
+        isQuitting = true;
+        if (tray) {
+          try { tray.destroy(); } catch (_) {}
+          tray = null;
+        }
+        if (backend) {
+          try { await backend.stop(); } catch (_) {}
+        }
+      },
     });
 
     await bootBackendAndLoad();

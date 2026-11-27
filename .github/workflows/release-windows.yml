@@ -61,6 +61,7 @@ jobs:
           node --check desktop/backend.js
           node --check desktop/secrets.js
           node --check desktop/tray.js
+          node --check desktop/updater.js
 
       - name: Package Windows Desktop executables
         shell: pwsh
@@ -70,15 +71,17 @@ jobs:
           npm --prefix desktop run dist
           $ver = (Get-Content desktop/package.json -Raw | ConvertFrom-Json).version
           Compress-Archive -Path "desktop/dist/win-unpacked/*" -DestinationPath "desktop/dist/codelet-$ver-win-x64-unpacked.zip" -Force
-          Get-ChildItem desktop/dist/*.exe, desktop/dist/*.zip
+          Get-ChildItem desktop/dist/*.exe, desktop/dist/*.zip, desktop/dist/latest.yml
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: codelet-desktop-windows
           path: |
+            desktop/dist/codelet-Setup-*.exe
             desktop/dist/codelet-*-portable.exe
             desktop/dist/codelet-*-win-x64-unpacked.zip
+            desktop/dist/latest.yml
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v') || inputs.tag != ''
@@ -91,14 +94,17 @@ jobs:
             ## codelet Desktop — Windows Release
 
             ### Highlights
-            - **Standalone Electron + FastAPI Desktop App**: Zero Python setup required; runs locally with system tray support (minimize to tray on close, right-click to quit cleanly).
+            - **Standalone Electron + FastAPI Desktop App**: Zero Python setup required; native system tray (minimize to tray on close, right-click to quit cleanly), Explorer **"Open with codelet"** right-click menu, and `electron-updater` auto-update checks.
             - **Windows DPAPI Encrypted API Key Vault**: Configure OpenAI-compatible relays or Anthropic directly in the in-app Settings modal; secrets are encrypted with Windows DPAPI (`safeStorage`) and never written in plaintext.
             - **Per-Profile Model Directory & AI Relay Discovery**: Map API model IDs to custom display names, drag-reorder, pull from `/models`, or let your configured model read relay docs to discover available models.
             - **Unified AGY-Style Workbench**: Single-card composer with inline model, thinking effort, `/btw` side chat, and permission mode controls; workspace-grouped Conversations; per-workspace persistence for Plugins, Tools, Skills & sidebar fold states; Cockpit telemetry & spend dashboard.
 
             ### Downloads
-            - **`codelet-*-portable.exe`**: Single-file portable executable — download and run directly.
-            - **`codelet-*-win-x64-unpacked.zip`**: Unpacked directory build — extract and run `codelet.exe` for the fastest cold start.
+            - **`codelet-Setup-*.exe`** *(Recommended)*: Standard Windows installer (per-user, no admin required, desktop/Start Menu shortcuts, Explorer right-click **"Open with codelet"**, fast cold start, auto-updates).
+            - **`codelet-*-portable.exe`**: Single-file portable executable — download and run directly without installing.
+            - **`codelet-*-win-x64-unpacked.zip`**: Unpacked directory build — extract and run `codelet.exe` for instant startup.
           files: |
+            desktop/dist/codelet-Setup-*.exe
             desktop/dist/codelet-*-portable.exe
             desktop/dist/codelet-*-win-x64-unpacked.zip
+            desktop/dist/latest.yml

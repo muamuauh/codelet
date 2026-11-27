@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld("codeletDesktop", {
   reportWorkspace: (cwd) => ipcRenderer.send("desktop:workspace-changed", String(cwd || "")),
   quitApp: () => ipcRenderer.invoke("desktop:quit"),
   getVersion: () => ipcRenderer.invoke("desktop:version"),
+  checkForUpdates: () => ipcRenderer.invoke("desktop:check-updates"),
   getVaultInfo: () => ipcRenderer.invoke("desktop:vault-info"),
   saveSecret: (name, value) =>
     ipcRenderer.invoke("desktop:save-secret", {

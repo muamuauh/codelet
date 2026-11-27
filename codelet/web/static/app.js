@@ -1943,6 +1943,8 @@ $("quit").addEventListener("click", async () => {
         if (payload.type === "new-chat") send({ type: "new_conversation" });
         else if (payload.type === "pick-workspace") openWorkspacePicker();
         else if (payload.type === "open-settings") openSettingsModal();
+        else if (payload.type === "open-workspace" && payload.path) send({ type: "set_workspace", path: payload.path });
+        else if (payload.type === "open-workspace" && payload.path) send({ type: "set_workspace", path: payload.path });
       });
     }
   }

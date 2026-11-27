@@ -9,6 +9,7 @@ function createAppTray({
   onPickWorkspace,
   onOpenWorkspaceFolder,
   onOpenSettings,
+  onCheckUpdates,
   onQuit,
 }) {
   let img = nativeImage.createFromPath(iconPath);
@@ -39,6 +40,10 @@ function createAppTray({
     {
       label: "API 与模型设置…",
       click: () => onOpenSettings && onOpenSettings(),
+    },
+    {
+      label: "检查更新…",
+      click: () => onCheckUpdates && onCheckUpdates(),
     },
     { type: "separator" },
     {
