@@ -62,7 +62,23 @@ const fmtMs = (ms) => {
 };
 const fmtUsd = (v) => (v == null ? "n/a" : "$" + Number(v).toFixed(v >= 1 ? 2 : 4));
 const atBottom = () => scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 90;
-const scroll = () => { scroller.scrollTop = scroller.scrollHeight; };
+let autoFollow = true;
+let scrollRaf = 0;
+function scroll(force = false) {
+  if (force) autoFollow = true;
+  if (!autoFollow) return;
+  const apply = () => {
+    scroller.scrollTop = scroller.scrollHeight;
+    $("scroll-bottom")?.classList.add("hidden");
+  };
+  apply();
+  if (!scrollRaf) {
+    scrollRaf = requestAnimationFrame(() => {
+      scrollRaf = 0;
+      if (autoFollow) apply();
+    });
+  }
+}
 function toggleEmpty() { $("empty").classList.toggle("hidden", transcript.children.length > 0); }
 
 async function copyText(text, btn, withLabel) {
@@ -344,7 +360,22 @@ function onUiAction(ev) {
   if (ev.open_drawer) openInspector(ev.open_drawer);
   if (ev.open_modal === "model") openModelModal();
 }
-function downloadMarkdown(filename, content) {
+const desktopApi = () => (typeof window !== "undefined" && window.codeletDesktop) || null;
+function pushNotice(message, level = "info") {
+  transcript.appendChild(el("div", `note ${level}`, message));
+  toggleEmpty();
+  if (atBottom()) scroll();
+}
+async function downloadMarkdown(filename, content) {
+  const api = desktopApi();
+  if (api && typeof api.saveMarkdown === "function") {
+    try {
+      const res = await api.saveMarkdown(filename, content);
+      if (res && res.ok && res.path) pushNotice(`Exported conversation to ${res.path}`, "info");
+      else if (res && !res.canceled && res.error) pushNotice(`Export failed: ${res.error}`, "error");
+      return;
+    } catch (_) {}
+  }
   const blob = new Blob([content], { type: "text/markdown;charset=utf-8" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob); a.download = filename;
@@ -470,7 +501,6 @@ $("toggle-inspector").addEventListener("click", () => {
 $("close-inspector").addEventListener("click", closeInspector);
 document.querySelectorAll(".insp-tab").forEach((b) => b.addEventListener("click", () => switchInspectorTab(b.dataset.tab)));
 $("ctx-pill").addEventListener("click", () => openInspector("cockpit"));
-$("bal-pill").addEventListener("click", () => openInspector("cockpit"));
 $("btw-quick").addEventListener("click", () => openInspector("btw"));
 
 // ---------- Cockpit rendering ----------
@@ -479,15 +509,27 @@ function gaugeColor(pct) {
   if (pct >= 70) return "var(--warn)";
   return "var(--ok)";
 }
-function onCockpit(ev) {
+let cockpitViewSession = "__live__";
+let cockpitProjectFilter = "__all__";
+let cockpitSessionGroups = [];
+let cockpitPollTimer = null;
+
+function onCockpit(ev, { fromHistory = false } = {}) {
+  if (!fromHistory && cockpitViewSession !== "__live__") return;
   cockpitData = ev;
   const enabled = ev && ev.enabled !== false;
   $("ck-disabled").classList.toggle("hidden", enabled);
   $("ck-content").classList.toggle("hidden", !enabled);
   $("ctx-pill").classList.toggle("hidden", !enabled);
-  if (!enabled) { $("bal-pill").classList.add("hidden"); return; }
+  const histBanner = $("ckHistBanner");
+  if (histBanner) {
+    const isHist = Boolean(ev && ev.viewing_history);
+    histBanner.classList.toggle("hidden", !isHist);
+    if (isHist) $("ckHistLabel").textContent = `历史会话：${ev.session_title || ev.session_id || ""}`;
+  }
+  if (!enabled) return;
 
-  const ctx = ev.context || {}, cache = ev.cache || {}, perf = ev.perf || {}, bal = ev.balance || {}, usage = ev.usage || {};
+  const ctx = ev.context || {}, cache = ev.cache || {}, perf = ev.perf || {}, usage = ev.usage || {};
   const pct = Math.max(0, Math.min(100, Number(ctx.pct || 0)));
   const color = gaugeColor(pct);
 
@@ -497,14 +539,6 @@ function onCockpit(ev) {
   mrFg.style.strokeDashoffset = String(56.55 * (1 - pct / 100));
   mrFg.style.stroke = color;
   $("ctx-pill").title = `Context: ${fmtCompact(ctx.used)} / ${fmtCompact(ctx.limit)} (${pct}%) — click for Cockpit`;
-
-  // Topbar balance pill
-  if (bal.available && bal.total_credits != null) {
-    $("bal-pill").classList.remove("hidden");
-    $("topBalVal").textContent = "$" + Number(bal.total_credits).toFixed(2);
-  } else {
-    $("bal-pill").classList.add("hidden");
-  }
 
   // Card 1: Context gauge + 5-segment popover
   $("ckRingFg").style.strokeDashoffset = String(251.33 * (1 - pct / 100));
@@ -533,20 +567,7 @@ function onCockpit(ev) {
   $("ckSpdAvg").textContent = perf.avg_speed_tps != null ? `${perf.avg_speed_tps} / ${perf.peak_speed_tps} t/s` : "—";
   renderTrendChart(perf.series || []);
 
-  // Card 4: Balance & spend
-  if (bal.available && bal.total_credits != null) {
-    $("ckBalTotal").textContent = `$${Number(bal.total_credits).toFixed(2)}`;
-    $("ckBalSub").textContent = `充值 $${Number(bal.top_up_credits || 0).toFixed(2)} · 赠金 $${Number(bal.bonus_credits || 0).toFixed(2)}`;
-    $("ckBalEst").textContent = bal.est_days_left != null ? `预计可用 ~${bal.est_days_left} 天` : "";
-  } else if (bal.configured && bal.error) {
-    $("ckBalTotal").textContent = "查询失败";
-    $("ckBalSub").textContent = bal.error;
-    $("ckBalEst").textContent = "";
-  } else {
-    $("ckBalTotal").textContent = fmtUsd(usage.last_7d?.cost_usd || 0) + " (7d)";
-    $("ckBalSub").textContent = "在 .env 配置 ZENMUX_MANAGEMENT_API_KEY 可显示实时余额";
-    $("ckBalEst").textContent = "本地计费";
-  }
+  // Card 4: Usage & spend (provider-agnostic)
   $("ckTodaySpend").textContent = fmtUsd(usage.today?.cost_usd || 0);
   $("ckTodayCalls").textContent = `${usage.today?.calls || 0} calls · ${fmtCompact((usage.today?.input_tokens || 0) + (usage.today?.output_tokens || 0))} tok`;
   $("ckWeekSpend").textContent = fmtUsd(usage.last_7d?.cost_usd || 0);
@@ -672,13 +693,122 @@ function syncCockpitEffort(effort) {
 }
 
 // Cockpit controls wiring
+function renderCockpitToolbar() {
+  const projSel = $("ckProjectSelect");
+  const sessSel = $("ckSessionSelect");
+  if (!projSel || !sessSel) return;
+
+  const namedGroups = cockpitSessionGroups.filter((g) => g.workspace);
+  const allGroups = cockpitSessionGroups;
+  const prevProj = cockpitProjectFilter;
+  projSel.innerHTML = "";
+  const optAll = document.createElement("option");
+  optAll.value = "__all__";
+  optAll.textContent = `全部项目 (${namedGroups.length || allGroups.length})`;
+  projSel.appendChild(optAll);
+  allGroups.forEach((g) => {
+    const val = g.workspace || "__other__";
+    const o = document.createElement("option");
+    o.value = val;
+    o.textContent = `${g.name || "Other"} (${(g.sessions || []).length})`;
+    projSel.appendChild(o);
+  });
+  const validProj = [...projSel.options].some((o) => o.value === prevProj) ? prevProj : "__all__";
+  cockpitProjectFilter = validProj;
+  projSel.value = validProj;
+
+  const curWsName = ($("ws-name")?.textContent || "").trim();
+  const prevSess = cockpitViewSession;
+  sessSel.innerHTML = "";
+  const liveOpt = document.createElement("option");
+  liveOpt.value = "__live__";
+  liveOpt.textContent = curWsName && curWsName !== "—" ? `当前对话 (${curWsName})` : "当前对话";
+  sessSel.appendChild(liveOpt);
+
+  const visibleGroups = validProj === "__all__"
+    ? allGroups
+    : allGroups.filter((g) => (g.workspace || "__other__") === validProj);
+  visibleGroups.forEach((g) => {
+    (g.sessions || []).forEach((r) => {
+      const o = document.createElement("option");
+      o.value = r.id;
+      const title = (r.title || r.summary || r.id).slice(0, 28);
+      o.textContent = `${title}${g.name ? " (" + g.name + ")" : ""}`;
+      sessSel.appendChild(o);
+    });
+  });
+
+  if ([...sessSel.options].some((o) => o.value === prevSess)) {
+    sessSel.value = prevSess;
+  } else {
+    cockpitViewSession = "__live__";
+    sessSel.value = "__live__";
+  }
+}
+
+async function refreshCockpitData({ manual = false, reloadList = false } = {}) {
+  const btn = $("ckRefreshBtn");
+  if (manual && btn) btn.classList.add("spinning");
+  try {
+    if (reloadList) await loadSessions();
+    if (cockpitViewSession === "__live__") {
+      if (ws && ws.readyState === 1) send({ type: "get_cockpit" });
+      else {
+        const snap = await safe("/api/cockpit");
+        if (snap) onCockpit(snap);
+      }
+    } else {
+      const snap = await safe("/api/cockpit?session_id=" + encodeURIComponent(cockpitViewSession));
+      if (snap && !snap.error) onCockpit(snap, { fromHistory: true });
+    }
+  } finally {
+    if (manual && btn) setTimeout(() => btn.classList.remove("spinning"), 380);
+  }
+}
+
+function resetCockpitPoller() {
+  if (cockpitPollTimer) { clearInterval(cockpitPollTimer); cockpitPollTimer = null; }
+  const ms = Number($("ckPollSelect")?.value || 0);
+  if (ms >= 1000) {
+    cockpitPollTimer = setInterval(() => {
+      if ($("app").classList.contains("insp-open") && activeInspectorTab === "cockpit") {
+        refreshCockpitData({ manual: false, reloadList: false });
+      }
+    }, ms);
+  }
+}
+
+$("ckProjectSelect")?.addEventListener("change", () => {
+  cockpitProjectFilter = $("ckProjectSelect").value || "__all__";
+  renderCockpitToolbar();
+  if (cockpitViewSession === "__live__") refreshCockpitData();
+});
+$("ckSessionSelect")?.addEventListener("change", () => {
+  cockpitViewSession = $("ckSessionSelect").value || "__live__";
+  refreshCockpitData({ manual: true });
+});
+$("ckBackLive")?.addEventListener("click", () => {
+  cockpitViewSession = "__live__";
+  if ($("ckSessionSelect")) $("ckSessionSelect").value = "__live__";
+  refreshCockpitData({ manual: true });
+});
+$("ckPollSelect")?.addEventListener("change", () => {
+  try { localStorage.setItem("codelet_ck_poll", $("ckPollSelect").value); } catch (_) {}
+  resetCockpitPoller();
+});
+$("ckRefreshBtn")?.addEventListener("click", () => refreshCockpitData({ manual: true, reloadList: true }));
+try {
+  const savedPoll = localStorage.getItem("codelet_ck_poll");
+  if (savedPoll != null && $("ckPollSelect")) $("ckPollSelect").value = savedPoll;
+} catch (_) {}
+resetCockpitPoller();
+
 $("ckRingTrigger").addEventListener("click", () => $("ckRingAnchor").classList.toggle("pinned"));
 document.addEventListener("click", (e) => {
   if (!$("ckRingAnchor").contains(e.target)) $("ckRingAnchor").classList.remove("pinned");
 });
 $("ckLimitSelect").addEventListener("change", (e) => send({ type: "set_context_limit", limit: Number(e.target.value) }));
 $("ckCompactBtn").addEventListener("click", () => send({ type: "compact", focus: "" }));
-$("ckRefreshBal").addEventListener("click", () => send({ type: "refresh_balance" }));
 document.querySelectorAll("#ckModeSeg .seg-btn").forEach((btn) => {
   btn.addEventListener("click", () => {
     const m = btn.dataset.mode;
@@ -864,9 +994,10 @@ $("git-diff-close").addEventListener("click", () => { activeDiffPath = ""; $("gi
 // ---------- Ctrl+K Global Command Palette ----------
 function buildPaletteActions() {
   const acts = [
+    { name: "API & Model Settings…", desc: "Configure API Key (DPAPI), Base URL & profiles", cat: "env", run: () => openSettingsModal() },
     { name: "Switch model…", desc: activeModel, cat: "model", run: () => openModelModal() },
     { name: "Refresh model list", desc: "Fetch latest models from endpoint", cat: "model", run: () => triggerModelRefresh() },
-    { name: "Open Cockpit", desc: "Context gauge, speed, cache & ZenMux balance", cat: "panel", run: () => openInspector("cockpit") },
+    { name: "Open Cockpit", desc: "Context gauge, speed, cache & usage spend", cat: "panel", run: () => openInspector("cockpit") },
     { name: "Open Side /btw", desc: "Ask a side question without polluting main context", cat: "panel", run: () => openInspector("btw") },
     { name: "Open Tasks", desc: "View live todo checklist", cat: "panel", run: () => openInspector("tasks") },
     { name: "Open Git Changes", desc: "Inspect modified files & diffs", cat: "panel", run: () => openInspector("changes") },
@@ -942,8 +1073,10 @@ function closeModeMenu() {
 function updateEffortUI(effort) {
   if (!EFFORT_DESC[effort]) return;
   activeEffort = effort;
-  $("effort-label").textContent = "Think: " + (effort === "medium" ? "med" : effort);
+  const effortNames = { auto: "Auto", off: "Off", low: "Low", medium: "Med", high: "High" };
+  $("effort-label").textContent = effortNames[effort] || effort;
   $("effort-chip").dataset.effort = effort;
+  $("effort-chip").title = `Thinking: ${effort}${EFFORT_DESC[effort] ? " — " + EFFORT_DESC[effort] : ""}`;
   [...$("effort-menu").querySelectorAll(".pop-item")].forEach((b) => {
     const on = b.dataset.effort === effort;
     b.classList.toggle("active", on);
@@ -966,6 +1099,9 @@ function onProfile(ev) {
   if (Array.isArray(ev.model_catalog) && ev.model_catalog.length) modelCatalog = ev.model_catalog;
   else if (Array.isArray(ev.models)) modelCatalog = ev.models.map((id) => ({ id, owned_by: id.includes("/") ? id.split("/")[0] : "" }));
   if (ev.models_meta) modelsMeta = ev.models_meta;
+  if ($("settings-dot") && typeof ev.api_key_configured === "boolean") {
+    $("settings-dot").classList.toggle("hidden", ev.api_key_configured);
+  }
   setRefreshing(false);
   updateModelChip();
   if (!$("model-modal").classList.contains("hidden")) renderModelPicker();
@@ -1007,8 +1143,11 @@ function modelMetaText() {
   return parts.join(" · ");
 }
 function updateModelChip() {
-  $("model-name").textContent = activeModel || "—";
-  $("model-chip").title = (activeModel ? activeModel + " — " : "") + modelMetaText();
+  const entry = modelCatalog.find((m) => m.id === activeModel);
+  const label = (entry && entry.display_name) ? entry.display_name : activeModel;
+  $("model-name").textContent = label || "—";
+  const idHint = (entry && entry.display_name && entry.display_name !== activeModel) ? `${entry.display_name} (${activeModel})` : activeModel;
+  $("model-chip").title = (idHint ? idHint + " — " : "") + modelMetaText();
   $("model-refresh").title = "Refresh models (" + modelMetaText() + ")";
   const metaEl = $("model-meta");
   if (metaEl) metaEl.textContent = modelMetaText();
@@ -1078,10 +1217,12 @@ function renderModelPicker() {
   filtered.forEach((m) => {
     const li = el("li", "m-row" + (m.id === activeModel ? " active" : ""));
     const left = el("div", "m-main");
-    left.appendChild(el("div", "m-id", m.id));
-    if (m.display_name && m.display_name.toLowerCase() !== m.id.toLowerCase()) left.appendChild(el("div", "m-sub", m.display_name));
+    const hasAlias = m.display_name && m.display_name.toLowerCase() !== m.id.toLowerCase();
+    left.appendChild(el("div", "m-id", hasAlias ? m.display_name : m.id));
+    if (hasAlias) left.appendChild(el("div", "m-sub mono", m.id));
     const right = el("div", "m-tags");
-    if (m.pinned) right.appendChild(el("span", "m-tag pin", "pinned"));
+    if (m.custom) right.appendChild(el("span", "m-tag pin", "directory"));
+    else if (m.pinned) right.appendChild(el("span", "m-tag pin", "pinned"));
     const ctx = fmtCtx(m.context_length); if (ctx) right.appendChild(el("span", "m-tag", ctx));
     const price = fmtPrice(m.pricing); if (price) right.appendChild(el("span", "m-tag", price));
     if (m.vision) right.appendChild(el("span", "m-tag cap", "vision"));
@@ -1101,7 +1242,40 @@ function renderModelPicker() {
     ul.appendChild(el("li", "m-empty", "No matching models."));
   }
 }
-function onWorkspace(ev) { $("ws-name").textContent = ev.name || ev.cwd; $("ws-chip").title = ev.cwd; }
+let wsUiState = { nav_open: {}, ws_groups_open: {} };
+let applyingWsUi = false;
+function applyWorkspaceUiState(st) {
+  wsUiState = {
+    nav_open: (st && typeof st.nav_open === "object" && st.nav_open) ? { ...st.nav_open } : {},
+    ws_groups_open: (st && typeof st.ws_groups_open === "object" && st.ws_groups_open) ? { ...st.ws_groups_open } : {},
+  };
+  applyingWsUi = true;
+  try {
+    ["nav-sessions", "nav-plugins", "nav-tools", "nav-skills"].forEach((id) => {
+      const d = $(id);
+      if (!d) return;
+      if (Object.prototype.hasOwnProperty.call(wsUiState.nav_open, id)) {
+        d.open = Boolean(wsUiState.nav_open[id]);
+      }
+    });
+  } finally {
+    applyingWsUi = false;
+  }
+}
+function onWorkspace(ev) {
+  const name = ev.name || ev.cwd;
+  $("ws-name").textContent = name;
+  $("ws-chip").title = ev.cwd;
+  if (ev.ui_state) {
+    applyWorkspaceUiState(ev.ui_state);
+    loadSessions();
+  }
+  const api = desktopApi();
+  if (api) {
+    if (typeof api.setTitle === "function") api.setTitle(`codelet — ${name}`);
+    if (typeof api.reportWorkspace === "function" && ev.cwd) api.reportWorkspace(ev.cwd);
+  }
+}
 function onResumed(ev) {
   transcript.innerHTML = ""; current = null;
   (ev.messages || []).forEach((m) => {
@@ -1117,7 +1291,7 @@ function onResumed(ev) {
       card.appendChild(head); b.body.appendChild(card);
     });
   });
-  current = null; toggleEmpty(); scroll();
+  current = null; toggleEmpty(); scroll(true);
 }
 
 // ---------- confirm & diff modals ----------
@@ -1253,13 +1427,29 @@ wireResizer("resizer-right", { side: "right", varName: "--insp-w", storageKey: "
     if (saved === "1") d.open = true;
     else if (saved === "0") d.open = false;
   } catch (_) {}
-  d.addEventListener("toggle", () => { try { localStorage.setItem("codelet_" + id, d.open ? "1" : "0"); } catch (_) {} });
+  d.addEventListener("toggle", () => {
+    try { localStorage.setItem("codelet_" + id, d.open ? "1" : "0"); } catch (_) {}
+    if (!applyingWsUi) {
+      wsUiState.nav_open[id] = d.open;
+      send({ type: "set_ui_state", nav_open: { [id]: d.open } });
+    }
+  });
 });
 scroller.addEventListener("scroll", () => {
-  const far = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight > 160;
-  $("scroll-bottom").classList.toggle("hidden", !far);
+  const dist = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+  autoFollow = dist < 80;
+  $("scroll-bottom").classList.toggle("hidden", dist <= 120);
+}, { passive: true });
+$("scroll-bottom").addEventListener("click", () => {
+  autoFollow = true;
+  scroller.scrollTo({ top: scroller.scrollHeight, behavior: "smooth" });
+  $("scroll-bottom").classList.add("hidden");
 });
-$("scroll-bottom").addEventListener("click", () => scroller.scrollTo({ top: scroller.scrollHeight, behavior: "smooth" }));
+if (typeof ResizeObserver === "function") {
+  new ResizeObserver(() => {
+    if (autoFollow) scroll();
+  }).observe(transcript);
+}
 
 // ---------- uploads / paste / drag-drop ----------
 async function uploadFiles(fileList) {
@@ -1367,7 +1557,7 @@ function submit() {
     setBusy(true);
     send({ type: "prompt", text, attachments: atts.map((a) => ({ name: a.name, path: a.path, is_image: a.is_image })) });
   }
-  scroll();
+  scroll(true);
 }
 $("composer").addEventListener("submit", (e) => { e.preventDefault(); submit(); });
 $("input").addEventListener("keydown", (e) => {
@@ -1438,6 +1628,8 @@ document.addEventListener("keydown", (e) => {
     $("model-modal").classList.add("hidden");
     $("ws-modal").classList.add("hidden");
     $("cmd-modal").classList.add("hidden");
+    $("settings-modal").classList.add("hidden");
+    $("discover-modal").classList.add("hidden");
   }
 });
 $("model-chip").addEventListener("click", openModelModal);
@@ -1471,7 +1663,19 @@ async function browseTo(path) {
     li.appendChild(document.createTextNode(" " + d.name)); li.onclick = () => browseTo(d.path); ul.appendChild(li);
   });
 }
-$("ws-chip").addEventListener("click", () => { $("ws-modal").classList.remove("hidden"); browseTo(""); });
+async function openWorkspacePicker() {
+  const api = desktopApi();
+  if (api && typeof api.pickWorkspaceDir === "function") {
+    try {
+      const chosen = await api.pickWorkspaceDir($("ws-chip").title || "");
+      if (chosen) send({ type: "set_workspace", path: chosen });
+      return;
+    } catch (_) {}
+  }
+  $("ws-modal").classList.remove("hidden");
+  browseTo("");
+}
+$("ws-chip").addEventListener("click", openWorkspacePicker);
 $("ws-cancel").addEventListener("click", () => $("ws-modal").classList.add("hidden"));
 $("ws-modal").addEventListener("click", (e) => { if (e.target === $("ws-modal")) $("ws-modal").classList.add("hidden"); });
 $("ws-go").addEventListener("click", () => browseTo($("ws-input").value.trim()));
@@ -1506,37 +1710,100 @@ function startInlineRename(li, r) {
   };
   inp.onblur = () => finish(true);
 }
+function buildSessionRow(r) {
+  const li = el("li", "session");
+  const main = el("div", "s-main");
+  main.appendChild(el("span", "title", r.title || r.summary || "(untitled)"));
+  const when = fmtSessionTime(r.updated_at);
+  const metaEl = el("span", "meta", `${when}${when ? " · " : ""}${r.message_count ?? "?"} msgs`);
+  if (r.updated_at) metaEl.title = r.updated_at;
+  main.appendChild(metaEl);
+  main.onclick = () => { activeSession = r.id; send({ type: "resume", id: r.id }); highlight(); };
+  const acts = el("div", "s-acts");
+  const rename = el("button", "s-btn"); rename.type = "button"; rename.innerHTML = SVG_PENCIL; rename.setAttribute("aria-label", "Rename conversation");
+  rename.onclick = (e) => { e.stopPropagation(); startInlineRename(li, r); };
+  const del = el("button", "s-btn danger"); del.type = "button"; del.innerHTML = SVG_TRASH; del.setAttribute("aria-label", "Delete conversation");
+  del.onclick = async (e) => {
+    e.stopPropagation();
+    const ok = await askConfirm({ title: "Delete conversation?", message: `Remove "${r.title || r.summary || "(untitled)"}" permanently?`, okText: "Delete", danger: true });
+    if (ok) send({ type: "delete_session", id: r.id });
+  };
+  acts.appendChild(rename); acts.appendChild(del);
+  li.appendChild(main); li.appendChild(acts);
+  li._id = r.id;
+  return li;
+}
 async function loadSessions() {
   const s = await safe("/api/sessions");
   const ul = $("sessions"); ul.innerHTML = "";
+  const groups = (s && Array.isArray(s.groups) && s.groups.length) ? s.groups : null;
+  cockpitSessionGroups = groups || [];
+  renderCockpitToolbar();
+  if (groups) {
+    let total = 0;
+    groups.forEach((g) => { total += (g.sessions || []).length; });
+    $("cnt-sessions").textContent = String(total);
+    if (total === 0 && groups.length === 1 && !groups[0].sessions.length) {
+      ul.appendChild(el("li", "meta", "(no conversations yet)"));
+      return;
+    }
+    const SVG_FOLDER = '<svg class="ic ws-g-ic" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>';
+    const SVG_CHEV = '<svg class="ic ws-g-chev" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>';
+    groups.forEach((g) => {
+      const items = g.sessions || [];
+      if (!g.is_current && !items.length) return;
+      const wrap = el("li", "ws-grp-li");
+      const det = document.createElement("details");
+      det.className = "ws-grp" + (g.is_current ? " current" : "");
+      const gKey = (g.workspace || "_other").toLowerCase();
+      const key = "codelet_wsg_" + gKey;
+      let isOpen = g.is_current || items.some((x) => x.id === activeSession);
+      if (wsUiState.ws_groups_open && Object.prototype.hasOwnProperty.call(wsUiState.ws_groups_open, gKey)) {
+        isOpen = Boolean(wsUiState.ws_groups_open[gKey]);
+      } else {
+        try {
+          const saved = localStorage.getItem(key);
+          if (saved === "1") isOpen = true;
+          else if (saved === "0") isOpen = false;
+        } catch (_) {}
+      }
+      det.open = isOpen;
+      let lastOpen = isOpen;
+      det.addEventListener("toggle", () => {
+        if (det.open === lastOpen) return;
+        lastOpen = det.open;
+        try { localStorage.setItem(key, det.open ? "1" : "0"); } catch (_) {}
+        wsUiState.ws_groups_open[gKey] = det.open;
+        send({ type: "set_ui_state", ws_groups_open: { [gKey]: det.open } });
+      });
+      const sum = document.createElement("summary");
+      sum.title = g.workspace || "Other workspaces";
+      sum.innerHTML = SVG_FOLDER;
+      sum.appendChild(el("span", "ws-g-name", g.name || g.workspace || "Other"));
+      sum.appendChild(el("span", "ws-g-cnt", String(items.length)));
+      sum.insertAdjacentHTML("beforeend", SVG_CHEV);
+      det.appendChild(sum);
+
+      const subUl = el("ul", "ws-grp-list");
+      if (!items.length) {
+        subUl.appendChild(el("li", "ws-grp-empty", "(no conversations in this folder)"));
+      } else {
+        items.forEach((r) => subUl.appendChild(buildSessionRow(r)));
+      }
+      det.appendChild(subUl);
+      wrap.appendChild(det);
+      ul.appendChild(wrap);
+    });
+    highlight();
+    return;
+  }
   const rows = (s && s.project) || [];
   $("cnt-sessions").textContent = String(rows.length);
   if (!rows.length) { ul.appendChild(el("li", "meta", "(no conversations here yet)")); return; }
-  rows.forEach((r) => {
-    const li = el("li", "session");
-    const main = el("div", "s-main");
-    main.appendChild(el("span", "title", r.title || r.summary || "(untitled)"));
-    const when = fmtSessionTime(r.updated_at);
-    const metaEl = el("span", "meta", `${when}${when ? " · " : ""}${r.message_count ?? "?"} msgs`);
-    if (r.updated_at) metaEl.title = r.updated_at;
-    main.appendChild(metaEl);
-    main.onclick = () => { activeSession = r.id; send({ type: "resume", id: r.id }); highlight(); };
-    const acts = el("div", "s-acts");
-    const rename = el("button", "s-btn"); rename.type = "button"; rename.innerHTML = SVG_PENCIL; rename.setAttribute("aria-label", "Rename conversation");
-    rename.onclick = (e) => { e.stopPropagation(); startInlineRename(li, r); };
-    const del = el("button", "s-btn danger"); del.type = "button"; del.innerHTML = SVG_TRASH; del.setAttribute("aria-label", "Delete conversation");
-    del.onclick = async (e) => {
-      e.stopPropagation();
-      const ok = await askConfirm({ title: "Delete conversation?", message: `Remove "${r.title || r.summary || "(untitled)"}" permanently?`, okText: "Delete", danger: true });
-      if (ok) send({ type: "delete_session", id: r.id });
-    };
-    acts.appendChild(rename); acts.appendChild(del);
-    li.appendChild(main); li.appendChild(acts);
-    li._id = r.id; ul.appendChild(li);
-  });
+  rows.forEach((r) => ul.appendChild(buildSessionRow(r)));
   highlight();
 }
-function highlight() { [...$("sessions").children].forEach((li) => li.classList.toggle("active", li._id === activeSession)); }
+function highlight() { $("sessions").querySelectorAll("li.session").forEach((li) => li.classList.toggle("active", li._id === activeSession)); }
 
 function renderPluginsList(rows) {
   const ul = $("plugins"); ul.innerHTML = "";
@@ -1639,12 +1906,588 @@ function renderSkillsList(rows) {
 }
 
 $("quit").addEventListener("click", async () => {
+  const api = desktopApi();
+  if (api && typeof api.quitApp === "function") {
+    const ok = await askConfirm({ title: "Quit codelet?", message: "This will exit codelet Desktop and stop the local backend server.", okText: "Quit", danger: true });
+    if (!ok) return;
+    await api.quitApp();
+    return;
+  }
   const ok = await askConfirm({ title: "Stop codelet server?", message: "This will shut down the local backend server and disconnect this tab.", okText: "Stop server", danger: true });
   if (!ok) return;
   try { await fetch("/api/shutdown", { method: "POST" }); } catch (_) {}
   if (ws) { ws.onclose = null; ws.close(); }
   setConnState("err");
   document.body.innerHTML = '<div style="display:grid;place-items:center;height:100vh;font:15px system-ui;color:#888;background:#18191c">codelet server stopped — you can close this tab.</div>';
+});
+
+// ---------- desktop integration hooks ----------
+{
+  const api = desktopApi();
+  if (api) {
+    document.body.classList.add("is-desktop");
+    if (typeof api.openExternal === "function") {
+      document.addEventListener("click", (e) => {
+        const a = e.target && e.target.closest ? e.target.closest("a[href]") : null;
+        if (!a) return;
+        const href = a.getAttribute("href") || "";
+        if (/^https?:\/\//i.test(href)) {
+          e.preventDefault();
+          api.openExternal(href);
+        }
+      });
+    }
+    if (typeof api.onAction === "function") {
+      api.onAction((payload) => {
+        if (!payload || !payload.type) return;
+        if (payload.type === "new-chat") send({ type: "new_conversation" });
+        else if (payload.type === "pick-workspace") openWorkspacePicker();
+        else if (payload.type === "open-settings") openSettingsModal();
+      });
+    }
+  }
+}
+
+// ---------- API & Model Settings Modal (with Desktop DPAPI vault) ----------
+const SETTINGS_PRESETS = {
+  openai: { name: "openai", provider: "openai", base_url: "https://api.openai.com/v1", model: "gpt-4.1", api_key_env: "OPENAI_API_KEY" },
+  anthropic: { name: "anthropic", provider: "anthropic", base_url: "https://api.anthropic.com", model: "claude-sonnet-4-5", api_key_env: "ANTHROPIC_API_KEY" },
+  deepseek: { name: "deepseek", provider: "openai", base_url: "https://api.deepseek.com/v1", model: "deepseek-chat", api_key_env: "DEEPSEEK_API_KEY" },
+  openrouter: { name: "openrouter", provider: "openai", base_url: "https://openrouter.ai/api/v1", model: "anthropic/claude-sonnet-4.5", api_key_env: "OPENROUTER_API_KEY" },
+  custom: { name: "custom", provider: "openai", base_url: "", model: "", api_key_env: "LLM_API_KEY" },
+};
+let settingsState = null;
+let settingsVaultInfo = null;
+let settingsClearKeyPending = false;
+let settingsModelsDraft = [];
+let settingsRelaySelected = false;
+let discoverContext = null;
+
+const OFFICIAL_HOSTS = new Set(["api.openai.com", "api.anthropic.com", "api.deepseek.com", "openrouter.ai", "localhost", "127.0.0.1"]);
+
+function isRelayEndpoint(baseUrl) {
+  if (settingsRelaySelected) return true;
+  const raw = (baseUrl || "").trim();
+  if (!raw) return false;
+  try {
+    const host = new URL(raw).hostname.toLowerCase();
+    return Boolean(host) && !OFFICIAL_HOSTS.has(host);
+  } catch (_) {
+    return false;
+  }
+}
+
+function setSettingsFeedback(msg, kind = "") {
+  const box = $("st-feedback");
+  if (!msg) { box.className = "st-feedback hidden"; box.textContent = ""; return; }
+  box.className = "st-feedback" + (kind ? " " + kind : "");
+  box.textContent = msg;
+}
+
+function renderSettingsModels() {
+  const box = $("st-models-list");
+  const sub = $("st-models-sub");
+  const cols = $("st-mdir-cols");
+  box.innerHTML = "";
+  const validCnt = settingsModelsDraft.filter((m) => (m.id || "").trim()).length;
+  sub.textContent = validCnt > 0
+    ? `已配置 ${validCnt} 个自定义模型（显示名称优先展示于选择器）`
+    : "正在使用适配器 / 接口默认模型";
+  cols.classList.toggle("hidden", settingsModelsDraft.length === 0);
+
+  let dragIdx = -1;
+  settingsModelsDraft.forEach((item, idx) => {
+    const row = el("div", "st-mrow");
+    row.draggable = true;
+    row.addEventListener("dragstart", () => { dragIdx = idx; row.classList.add("dragging"); });
+    row.addEventListener("dragend", () => { row.classList.remove("dragging"); box.querySelectorAll(".drag-over").forEach((x) => x.classList.remove("drag-over")); });
+    row.addEventListener("dragover", (e) => { e.preventDefault(); row.classList.add("drag-over"); });
+    row.addEventListener("dragleave", () => row.classList.remove("drag-over"));
+    row.addEventListener("drop", (e) => {
+      e.preventDefault();
+      row.classList.remove("drag-over");
+      if (dragIdx < 0 || dragIdx === idx) return;
+      const [moved] = settingsModelsDraft.splice(dragIdx, 1);
+      settingsModelsDraft.splice(idx, 0, moved);
+      renderSettingsModels();
+    });
+
+    const handle = el("span", "st-mhandle", "≡");
+    handle.title = "拖动调整顺序";
+
+    const idInp = document.createElement("input");
+    idInp.type = "text";
+    idInp.className = "st-mid";
+    idInp.placeholder = "实际模型 ID，如 deepseek-flash";
+    idInp.value = item.id || "";
+    idInp.addEventListener("input", () => { item.id = idInp.value; });
+
+    const nameInp = document.createElement("input");
+    nameInp.type = "text";
+    nameInp.className = "st-mname";
+    nameInp.placeholder = "显示名称，如 DeepSeek-V4.1-Flash";
+    nameInp.value = item.display_name || "";
+    nameInp.addEventListener("input", () => { item.display_name = nameInp.value; });
+
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "st-mdel";
+    del.innerHTML = SVG_TRASH;
+    del.title = "删除该模型";
+    del.addEventListener("click", () => {
+      settingsModelsDraft.splice(idx, 1);
+      renderSettingsModels();
+    });
+
+    row.appendChild(handle);
+    row.appendChild(idInp);
+    row.appendChild(nameInp);
+    row.appendChild(del);
+    box.appendChild(row);
+  });
+}
+
+function collectSettingsModels() {
+  const out = [];
+  const seen = new Set();
+  settingsModelsDraft.forEach((m) => {
+    const id = (m.id || "").trim();
+    if (!id || seen.has(id)) return;
+    seen.add(id);
+    const display_name = (m.display_name || "").trim() || id;
+    out.push({ id, display_name });
+  });
+  return out;
+}
+
+function populateSettingsForm(prof) {
+  settingsClearKeyPending = false;
+  settingsRelaySelected = false;
+  const p = prof || {};
+  $("st-name").value = p.name && p.name !== "_env" ? p.name : "default";
+  $("st-provider").value = p.provider === "anthropic" ? "anthropic" : "openai";
+  $("st-base-url").value = p.base_url || "";
+  $("st-model").value = p.model || "";
+  $("st-key-env").value = p.api_key_env || ($("st-provider").value === "anthropic" ? "ANTHROPIC_API_KEY" : "LLM_API_KEY");
+  $("st-api-key").value = "";
+  $("st-api-key").type = "password";
+  $("st-key-eye").textContent = "显示";
+
+  settingsModelsDraft = Array.isArray(p.models)
+    ? p.models.map((m) => ({ id: m.id || "", display_name: m.display_name || m.id || "" }))
+    : [];
+  renderSettingsModels();
+
+  const stEl = $("st-key-status");
+  if (p.api_key_configured) {
+    stEl.textContent = `已配置 (${p.api_key_preview || "••••"})`;
+    stEl.className = "st-key-status mono ok";
+  } else {
+    stEl.textContent = "未配置";
+    stEl.className = "st-key-status mono warn";
+  }
+  setSettingsFeedback("");
+}
+
+function renderSettingsProfiles(selectedName) {
+  const sel = $("st-prof-select");
+  sel.innerHTML = "";
+  const profiles = (settingsState && settingsState.profiles) || {};
+  const names = Object.keys(profiles);
+  if (!names.length) {
+    const opt = document.createElement("option");
+    opt.value = "default"; opt.textContent = "default";
+    sel.appendChild(opt);
+    populateSettingsForm({ name: "default", provider: "openai", api_key_env: "LLM_API_KEY" });
+    return;
+  }
+  names.forEach((n) => {
+    const p = profiles[n];
+    const opt = document.createElement("option");
+    opt.value = n;
+    opt.textContent = `${n === "_env" ? "default (env)" : n} · ${p.provider}${p.api_key_configured ? " ✓" : ""}`;
+    sel.appendChild(opt);
+  });
+  const target = selectedName && profiles[selectedName] ? selectedName : (settingsState.active_profile || names[0]);
+  sel.value = target;
+  populateSettingsForm(profiles[target]);
+}
+
+async function openSettingsModal() {
+  $("settings-modal").classList.remove("hidden");
+  setSettingsFeedback("");
+  const api = desktopApi();
+  const badge = $("st-vault-badge");
+  const note = $("st-security-note");
+  if (api && typeof api.getVaultInfo === "function") {
+    try {
+      settingsVaultInfo = await api.getVaultInfo();
+    } catch (_) {
+      settingsVaultInfo = null;
+    }
+  } else {
+    settingsVaultInfo = null;
+  }
+  if (settingsVaultInfo && settingsVaultInfo.available) {
+    badge.textContent = settingsVaultInfo.storage === "dpapi" ? "🔒 Windows DPAPI 加密存储" : "🔒 系统钥匙串加密存储";
+    badge.className = "vault-badge secure";
+    note.textContent = "API Key 通过系统 DPAPI 加密存入本机凭据库，绝不以明文写入磁盘；非敏感配置保存至 ~/.codelet/settings.json。";
+  } else {
+    badge.textContent = "内存会话 / 环境变量";
+    badge.className = "vault-badge";
+    note.textContent = "当前为浏览器模式：新输入的 API Key 仅保存在当前后端进程内存中（不写明文文件），非敏感配置保存至 ~/.codelet/settings.json。";
+  }
+
+  const data = await safe("/api/settings");
+  if (data) {
+    settingsState = data;
+    renderSettingsProfiles(data.active_profile);
+  }
+}
+
+$("open-settings").addEventListener("click", openSettingsModal);
+$("st-cancel").addEventListener("click", () => $("settings-modal").classList.add("hidden"));
+$("settings-modal").addEventListener("click", (e) => { if (e.target === $("settings-modal")) $("settings-modal").classList.add("hidden"); });
+
+$("st-prof-select").addEventListener("change", () => {
+  const n = $("st-prof-select").value;
+  if (settingsState && settingsState.profiles && settingsState.profiles[n]) {
+    populateSettingsForm(settingsState.profiles[n]);
+  }
+});
+
+$("st-prof-new").addEventListener("click", () => {
+  populateSettingsForm({
+    name: "custom",
+    provider: "openai",
+    base_url: "",
+    model: "",
+    api_key_env: "LLM_API_KEY",
+    api_key_configured: false,
+  });
+  $("st-name").focus();
+  $("st-name").select();
+});
+
+$("st-prof-del").addEventListener("click", async () => {
+  const target = $("st-prof-select").value;
+  if (!target || target === "_env") {
+    setSettingsFeedback("当前默认环境变量方案不可删除。", "err");
+    return;
+  }
+  const ok = await askConfirm({ title: "删除配置方案？", message: `确定删除配置方案 "${target}" 吗？（不会自动删除其他方案共享的密钥）`, okText: "删除", danger: true });
+  if (!ok) return;
+  try {
+    const r = await (await fetch("/api/settings/apply", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ delete_profile: target }),
+    })).json();
+    if (r.ok) {
+      settingsState = r;
+      renderSettingsProfiles(r.active_profile);
+      setSettingsFeedback(`已删除配置方案 "${target}"`, "ok");
+    } else {
+      setSettingsFeedback(r.error || "删除失败", "err");
+    }
+  } catch (err) {
+    setSettingsFeedback("请求失败: " + err.message, "err");
+  }
+});
+
+document.querySelectorAll("#st-presets .st-preset").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const p = SETTINGS_PRESETS[btn.dataset.preset];
+    if (!p) return;
+    settingsRelaySelected = btn.dataset.preset === "custom";
+    $("st-name").value = p.name;
+    $("st-provider").value = p.provider;
+    $("st-base-url").value = p.base_url;
+    $("st-model").value = p.model;
+    $("st-key-env").value = p.api_key_env;
+    setSettingsFeedback(
+      settingsRelaySelected
+        ? "已选择自定义中转站模板：填好 Base URL、默认模型和 API Key 并保存后，可自动用该模型阅读中转站文档拉取全部可用模型。"
+        : `已填充 ${btn.textContent} 模板，请填写对应 API Key 后点击保存。`
+    );
+  });
+});
+
+$("st-add-model").addEventListener("click", () => {
+  settingsModelsDraft.push({ id: "", display_name: "" });
+  renderSettingsModels();
+  const inputs = $("st-models-list").querySelectorAll(".st-mid");
+  if (inputs.length) inputs[inputs.length - 1].focus();
+});
+
+$("st-fetch-models").addEventListener("click", async () => {
+  const btn = $("st-fetch-models");
+  btn.disabled = true;
+  setSettingsFeedback("正在从接口拉取模型列表…");
+  try {
+    const r = await (await fetch("/api/settings/discover-models", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        provider: $("st-provider").value,
+        base_url: $("st-base-url").value.trim(),
+        model: $("st-model").value.trim(),
+        api_key_env: $("st-key-env").value.trim(),
+        api_key: $("st-api-key").value.trim(),
+        use_llm: false,
+      }),
+    })).json();
+    if (r.ok && Array.isArray(r.models)) {
+      const existingMap = new Map(collectSettingsModels().map((m) => [m.id, m.display_name]));
+      r.models.forEach((m) => { if (!existingMap.has(m.id)) existingMap.set(m.id, m.display_name || m.id); });
+      settingsModelsDraft = [...existingMap.entries()].map(([id, display_name]) => ({ id, display_name }));
+      renderSettingsModels();
+      setSettingsFeedback("✓ " + (r.message || `已拉取 ${r.models.length} 个模型`) + "，可编辑显示名称后保存。", "ok");
+    } else {
+      setSettingsFeedback("✕ " + (r.error || "接口未返回模型列表"), "err");
+    }
+  } catch (err) {
+    setSettingsFeedback("✕ 拉取失败: " + err.message, "err");
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+function setDiscoverStatus(msg, kind = "") {
+  const box = $("disc-status");
+  if (!msg) { box.className = "st-feedback hidden"; box.textContent = ""; return; }
+  box.className = "st-feedback" + (kind ? " " + kind : "");
+  box.textContent = msg;
+}
+
+function openDiscoverModal(ctx) {
+  discoverContext = ctx;
+  let hostLabel = ctx.base_url || "当前中转站";
+  try { hostLabel = new URL(ctx.base_url).host || hostLabel; } catch (_) {}
+  $("disc-desc").textContent =
+    `检测到你配置了中转站（${hostLabel}）与默认模型 "${ctx.model}"。是否使用该模型自动阅读中转站文档并结合 /models 接口，提取所有可用模型填充到模型目录？`;
+  $("disc-docs-url").value = "";
+  setDiscoverStatus("");
+  $("disc-run").disabled = false;
+  $("discover-modal").classList.remove("hidden");
+}
+
+$("st-discover-models").addEventListener("click", () => {
+  const model = $("st-model").value.trim();
+  const base_url = $("st-base-url").value.trim();
+  if (!model) {
+    setSettingsFeedback("请先填写「默认模型」，再使用该模型自动阅读文档。", "err");
+    $("st-model").focus();
+    return;
+  }
+  openDiscoverModal({
+    profile: $("st-name").value.trim() || "default",
+    provider: $("st-provider").value,
+    base_url,
+    model,
+    api_key_env: $("st-key-env").value.trim(),
+    api_key: $("st-api-key").value.trim(),
+    autoSave: false,
+  });
+});
+
+$("disc-skip").addEventListener("click", () => $("discover-modal").classList.add("hidden"));
+$("discover-modal").addEventListener("click", (e) => { if (e.target === $("discover-modal")) $("discover-modal").classList.add("hidden"); });
+
+$("disc-run").addEventListener("click", async () => {
+  if (!discoverContext) return;
+  const btn = $("disc-run");
+  btn.disabled = true;
+  setDiscoverStatus(`正在探测文档并调用 ${discoverContext.model} 提取可用模型（可能需要数秒）…`);
+  try {
+    const r = await (await fetch("/api/settings/discover-models", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        provider: discoverContext.provider,
+        base_url: discoverContext.base_url,
+        model: discoverContext.model,
+        api_key_env: discoverContext.api_key_env,
+        api_key: discoverContext.api_key || undefined,
+        docs_url: $("disc-docs-url").value.trim(),
+        use_llm: true,
+      }),
+    })).json();
+    if (!r.ok || !Array.isArray(r.models) || !r.models.length) {
+      setDiscoverStatus("✕ " + (r.error || "未发现可用模型"), "err");
+      btn.disabled = false;
+      return;
+    }
+
+    // Merge discovered models into Settings modal draft
+    const merged = new Map(collectSettingsModels().map((m) => [m.id, m.display_name]));
+    r.models.forEach((m) => {
+      if (!merged.has(m.id)) merged.set(m.id, m.display_name || m.id);
+    });
+    const nextModels = [...merged.entries()].map(([id, display_name]) => ({ id, display_name }));
+    settingsModelsDraft = nextModels;
+    renderSettingsModels();
+
+    // If triggered right after saving a relay, immediately persist the discovered directory too
+    if (discoverContext.autoSave) {
+      const saveRes = await (await fetch("/api/settings/apply", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          profile: discoverContext.profile,
+          provider: discoverContext.provider,
+          base_url: discoverContext.base_url,
+          model: discoverContext.model,
+          api_key_env: discoverContext.api_key_env,
+          models: nextModels,
+        }),
+      })).json();
+      if (saveRes && saveRes.ok) {
+        settingsState = saveRes;
+        renderSettingsProfiles(saveRes.active_profile);
+      }
+    }
+
+    $("discover-modal").classList.add("hidden");
+    $("settings-modal").classList.remove("hidden");
+    setSettingsFeedback(
+      "✓ " + (r.message || `已发现 ${r.models.length} 个模型`) + (discoverContext.autoSave ? "，已自动写入模型目录（可继续微调显示名称后再次保存）。" : "，请核对显示名称后点击「保存并立即生效」。"),
+      "ok"
+    );
+    $("st-models-list").scrollIntoView({ behavior: "smooth", block: "nearest" });
+  } catch (err) {
+    setDiscoverStatus("✕ 自动发现失败: " + err.message, "err");
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+$("st-key-eye").addEventListener("click", () => {
+  const inp = $("st-api-key");
+  const show = inp.type === "password";
+  inp.type = show ? "text" : "password";
+  $("st-key-eye").textContent = show ? "隐藏" : "显示";
+});
+
+$("st-key-clear").addEventListener("click", () => {
+  settingsClearKeyPending = true;
+  $("st-api-key").value = "";
+  const stEl = $("st-key-status");
+  stEl.textContent = "待清除（点击保存后生效）";
+  stEl.className = "st-key-status mono warn";
+});
+
+$("st-test").addEventListener("click", async () => {
+  const btn = $("st-test");
+  btn.disabled = true;
+  setSettingsFeedback("正在测试接口连通性…");
+  try {
+    const payload = {
+      provider: $("st-provider").value,
+      base_url: $("st-base-url").value.trim(),
+      model: $("st-model").value.trim(),
+      api_key_env: $("st-key-env").value.trim(),
+      api_key: $("st-api-key").value.trim(),
+    };
+    const r = await (await fetch("/api/settings/test", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    })).json();
+    if (r.ok) setSettingsFeedback("✓ " + (r.message || "连接成功"), "ok");
+    else setSettingsFeedback("✕ " + (r.error || "连接失败"), "err");
+  } catch (err) {
+    setSettingsFeedback("✕ 测试请求失败: " + err.message, "err");
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+$("st-save").addEventListener("click", async () => {
+  const btn = $("st-save");
+  const profile = $("st-name").value.trim() || "default";
+  const provider = $("st-provider").value;
+  const base_url = $("st-base-url").value.trim();
+  const model = $("st-model").value.trim();
+  const api_key_env = $("st-key-env").value.trim() || (provider === "anthropic" ? "ANTHROPIC_API_KEY" : "LLM_API_KEY");
+  const rawKey = $("st-api-key").value.trim();
+
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(api_key_env)) {
+    setSettingsFeedback("密钥标识名必须为合法环境变量名（字母/下划线开头，仅含字母数字下划线）", "err");
+    return;
+  }
+
+  btn.disabled = true;
+  setSettingsFeedback("正在安全保存并应用配置…");
+  try {
+    const api = desktopApi();
+    if (api && settingsVaultInfo && settingsVaultInfo.available) {
+      if (settingsClearKeyPending && !rawKey && typeof api.deleteSecret === "function") {
+        await api.deleteSecret(api_key_env);
+      } else if (rawKey && typeof api.saveSecret === "function") {
+        const sr = await api.saveSecret(api_key_env, rawKey);
+        if (!sr || !sr.ok) {
+          setSettingsFeedback("DPAPI 加密保存失败: " + (sr?.error || "未知错误"), "err");
+          btn.disabled = false;
+          return;
+        }
+      }
+    }
+
+    const customModels = collectSettingsModels();
+    const shouldPromptRelayDiscover =
+      isRelayEndpoint(base_url) &&
+      Boolean(model) &&
+      customModels.length === 0;
+
+    const r = await (await fetch("/api/settings/apply", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        profile,
+        provider,
+        base_url,
+        model,
+        api_key_env,
+        api_key: rawKey || undefined,
+        clear_api_key: settingsClearKeyPending && !rawKey,
+        models: customModels,
+      }),
+    })).json();
+
+    if (!r.ok) {
+      setSettingsFeedback("保存失败: " + (r.error || "未知错误"), "err");
+      btn.disabled = false;
+      return;
+    }
+
+    settingsState = r;
+    settingsClearKeyPending = false;
+    $("st-api-key").value = "";
+    renderSettingsProfiles(r.active_profile);
+    if ($("settings-dot")) $("settings-dot").classList.toggle("hidden", !!r.api_key_configured);
+    setSettingsFeedback("✓ 配置已保存并立即生效", "ok");
+    pushNotice(`已切换配置方案 "${r.active_profile}" (${r.provider}${r.model ? " · " + r.model : ""})`, "info");
+
+    if (shouldPromptRelayDiscover && r.api_key_configured) {
+      $("settings-modal").classList.add("hidden");
+      openDiscoverModal({
+        profile: r.active_profile,
+        provider,
+        base_url,
+        model,
+        api_key_env,
+        api_key: "",
+        autoSave: true,
+      });
+    } else {
+      setTimeout(() => { $("settings-modal").classList.add("hidden"); }, 550);
+    }
+  } catch (err) {
+    setSettingsFeedback("保存请求失败: " + err.message, "err");
+  } finally {
+    btn.disabled = false;
+  }
 });
 
 // ---------- bootstrap ----------
