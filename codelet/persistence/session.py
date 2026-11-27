@@ -79,7 +79,8 @@ class SessionStore:
 
     def record(self, agent: "AgentLoop") -> Path:
         """Atomically write a snapshot of `agent` to disk."""
-        snapshot = _serialize(agent, self.id, self.created_at)
+        workspace = str(self.project_dir.parent.resolve()) if self.project_dir is not None else os.getcwd()
+        snapshot = _serialize(agent, self.id, self.created_at, workspace=workspace)
         path = _write_atomic(self.path, snapshot)
         if self.project_dir is not None:
             # Best-effort: a broken registry must never sink the real save.
@@ -132,6 +133,7 @@ def list_sessions(base_dir: Path | None = None) -> list[dict[str, Any]]:
             "provider": data.get("provider"),
             "profile": data.get("profile"),
             "summary": data.get("summary") or "",
+            "workspace": data.get("workspace") or "",
             "created_at": data.get("created_at"),
             "updated_at": data.get("updated_at"),
             "message_count": len(data.get("messages") or []),
@@ -140,36 +142,144 @@ def list_sessions(base_dir: Path | None = None) -> list[dict[str, Any]]:
     return out
 
 
+def list_sessions_by_workspace(
+    *,
+    base_dir: Path | None = None,
+    current_workspace: str | Path | None = None,
+    limit_per_group: int = 30,
+) -> list[dict[str, Any]]:
+    """Group all saved sessions by workspace folder, current workspace first."""
+    cur_ws = str(Path(current_workspace).resolve()) if current_workspace else os.getcwd()
+    cur_key = os.path.normcase(os.path.normpath(cur_ws))
+
+    # Map session ids registered in the current project's `.codelet/sessions.json`
+    # so older snapshots (saved before `workspace` was recorded) still land under it.
+    cur_proj_ids: dict[str, dict[str, Any]] = {}
+    for row in list_project_sessions(Path(cur_ws) / ".codelet"):
+        sid = row.get("id")
+        if sid:
+            cur_proj_ids[sid] = row
+
+    all_rows = list_sessions(base_dir)
+    seen_ids: set[str] = set()
+    groups_map: dict[str, dict[str, Any]] = {}
+
+    def _ensure_group(ws_path: str) -> dict[str, Any]:
+        norm_path = str(Path(ws_path)) if ws_path else ""
+        key = os.path.normcase(os.path.normpath(norm_path)) if norm_path else ""
+        if key not in groups_map:
+            is_cur = bool(key) and key == cur_key
+            name = (os.path.basename(norm_path.rstrip("\\/")) or norm_path) if norm_path else "Other"
+            groups_map[key] = {
+                "workspace": norm_path,
+                "name": name,
+                "is_current": is_cur,
+                "sessions": [],
+            }
+        return groups_map[key]
+
+    # Always include current workspace group at the top so the user sees where they are.
+    _ensure_group(cur_ws)
+
+    for row in all_rows:
+        sid = row["id"]
+        seen_ids.add(sid)
+        ws = row.get("workspace") or ""
+        if not ws and sid in cur_proj_ids:
+            ws = cur_ws
+            row = {**row, "workspace": ws}
+            if cur_proj_ids[sid].get("title") and not row.get("summary"):
+                row["summary"] = cur_proj_ids[sid]["title"]
+        grp = _ensure_group(ws)
+        if len(grp["sessions"]) < limit_per_group:
+            grp["sessions"].append(row)
+
+    # Also surface any current-project registry entries whose global file is missing/separate.
+    for sid, entry in cur_proj_ids.items():
+        if sid in seen_ids:
+            continue
+        grp = _ensure_group(cur_ws)
+        if len(grp["sessions"]) < limit_per_group:
+            grp["sessions"].append({
+                "id": sid,
+                "title": entry.get("title") or "",
+                "summary": entry.get("title") or "",
+                "workspace": cur_ws,
+                "updated_at": entry.get("updated_at"),
+                "model": entry.get("model"),
+                "provider": entry.get("provider"),
+                "message_count": entry.get("message_count", 0),
+            })
+
+    groups = list(groups_map.values())
+    for g in groups:
+        g["sessions"].sort(key=lambda d: d.get("updated_at") or "", reverse=True)
+
+    def _group_sort_key(g: dict[str, Any]) -> tuple[int, int, str]:
+        # Current workspace first; non-empty named workspaces next by latest session; "Other" last.
+        is_cur_rank = 0 if g["is_current"] else (2 if not g["workspace"] else 1)
+        latest = g["sessions"][0].get("updated_at") or "" if g["sessions"] else ""
+        return (is_cur_rank, 0 if g["sessions"] else 1, "" if not latest else latest)
+
+    # Sort current first, then others newest-first
+    cur_groups = [g for g in groups if g["is_current"]]
+    named_groups = [g for g in groups if not g["is_current"] and g["workspace"] and g["sessions"]]
+    other_groups = [g for g in groups if not g["workspace"] and g["sessions"]]
+    named_groups.sort(key=lambda g: (g["sessions"][0].get("updated_at") or ""), reverse=True)
+    return cur_groups + named_groups + other_groups
+
+
 def rename_session(session_id: str, title: str, *, base_dir: Path | None = None,
                    project_dir: Path | None = None) -> None:
     """Retitle a session: update the snapshot's summary + the project registry."""
     base_dir = base_dir or SESSION_DIR
     path = base_dir / f"{session_id}.json"
+    snap_ws: str | None = None
     if path.exists():
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
+            snap_ws = data.get("workspace") or None
             data["summary"] = title
             _write_atomic(path, data)
         except (OSError, json.JSONDecodeError):
             pass
-    reg = _read_registry(project_dir)
-    if isinstance(reg.get(session_id), dict):
-        reg[session_id]["title"] = title
-        _write_atomic(_registry_path(project_dir), reg)
+    for pdir in _candidate_project_dirs(project_dir, snap_ws):
+        reg = _read_registry(pdir)
+        if isinstance(reg.get(session_id), dict):
+            reg[session_id]["title"] = title
+            _write_atomic(_registry_path(pdir), reg)
 
 
 def delete_session(session_id: str, *, base_dir: Path | None = None,
                    project_dir: Path | None = None) -> None:
     """Remove a session snapshot and its project-registry entry."""
     base_dir = base_dir or SESSION_DIR
+    path = base_dir / f"{session_id}.json"
+    snap_ws: str | None = None
+    if path.exists():
+        try:
+            snap_ws = json.loads(path.read_text(encoding="utf-8")).get("workspace") or None
+        except (OSError, json.JSONDecodeError):
+            pass
     try:
-        (base_dir / f"{session_id}.json").unlink()
+        path.unlink()
     except OSError:
         pass
-    reg = _read_registry(project_dir)
-    if session_id in reg:
-        del reg[session_id]
-        _write_atomic(_registry_path(project_dir), reg)
+    for pdir in _candidate_project_dirs(project_dir, snap_ws):
+        reg = _read_registry(pdir)
+        if session_id in reg:
+            del reg[session_id]
+            _write_atomic(_registry_path(pdir), reg)
+
+
+def _candidate_project_dirs(project_dir: Path | None, snap_workspace: str | None) -> list[Path | None]:
+    out: list[Path | None] = [project_dir]
+    if snap_workspace:
+        cand = Path(snap_workspace) / ".codelet"
+        cur = _project_dir_or_cwd(project_dir)
+        if os.path.normcase(str(cand)) != os.path.normcase(str(cur)):
+            out.append(cand)
+    return out
 
 
 # ---------- project-local session registry ----------
@@ -223,7 +333,7 @@ def list_project_sessions(project_dir: Path | None = None) -> list[dict[str, Any
 
 # ---------- serialization ----------
 
-def _serialize(agent: "AgentLoop", session_id: str, created_at: str) -> dict[str, Any]:
+def _serialize(agent: "AgentLoop", session_id: str, created_at: str, *, workspace: str | None = None) -> dict[str, Any]:
     cfg = agent.config
     todos: list[dict[str, Any]] = []
     if getattr(agent, "todo_store", None) is not None:
@@ -234,6 +344,7 @@ def _serialize(agent: "AgentLoop", session_id: str, created_at: str) -> dict[str
         "id": session_id,
         "created_at": created_at,
         "updated_at": _utcnow_iso(),
+        "workspace": workspace if workspace is not None else os.getcwd(),
         "model": cfg.model,
         "provider": cfg.provider.value,
         "profile": cfg.profile_name,

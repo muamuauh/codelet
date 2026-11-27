@@ -19,23 +19,26 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import hmac
+import json
 import mimetypes
 import os
 import subprocess
+import sys
 import uuid
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from fastapi import FastAPI, File, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, File, Request, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from rich.console import Console
 
 from ..agent_loop import AgentLoop
 from ..cli import _build_config
-from ..config import LLMProvider, PermissionMode
+from ..config import Config, LLMProvider, PermissionMode
 from ..llm.factory import build_client
 from ..llm.models import (
     CatalogSnapshot,
@@ -49,6 +52,7 @@ from ..persistence.session import (
     delete_session,
     list_project_sessions,
     list_sessions,
+    list_sessions_by_workspace,
     load_session,
     rename_session,
     restore_into,
@@ -58,7 +62,20 @@ from ..skills.loader import load_skills
 from ..slash.loader import expand_command, load_commands
 from ..system_prompt import build_system_prompt
 
-STATIC_DIR = Path(__file__).parent / "static"
+def _resolve_static_dir() -> Path:
+    here = Path(__file__).resolve().parent / "static"
+    if here.exists():
+        return here
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        cand = Path(meipass) / "codelet" / "web" / "static"
+        if cand.exists():
+            return cand
+    return here
+
+
+STATIC_DIR = _resolve_static_dir()
+DESKTOP_COOKIE = "codelet_desktop_token"
 
 
 def _env_model_list() -> list[str]:
@@ -78,16 +95,94 @@ def _env_model_list() -> list[str]:
     return out
 
 
+def _normalize_profile_models(raw: Any) -> list[dict[str, str]]:
+    """Normalize per-profile custom model directory entries into [{id, display_name}]."""
+    if not isinstance(raw, list):
+        return []
+    out: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for item in raw:
+        if isinstance(item, str):
+            mid = item.strip()
+            dname = mid
+        elif isinstance(item, dict):
+            mid = str(item.get("id") or "").strip()
+            dname = str(item.get("display_name") or item.get("name") or "").strip() or mid
+        else:
+            continue
+        if not mid or mid in seen:
+            continue
+        seen.add(mid)
+        out.append({"id": mid, "display_name": dname})
+    return out
+
+
+def _active_profile_models(settings: dict[str, Any], profile_name: str | None) -> list[dict[str, str]]:
+    if not profile_name:
+        return []
+    profiles = settings.get("profiles") or {}
+    entry = profiles.get(profile_name)
+    if not isinstance(entry, dict):
+        return []
+    return _normalize_profile_models(entry.get("models"))
+
+
+def _strip_html_to_text(raw: str, limit: int = 16000) -> str:
+    import html as _html
+    import re as _re
+
+    text = _re.sub(r"(?is)<(script|style|noscript|svg)[^>]*>.*?</\1>", " ", raw or "")
+    text = _re.sub(r"(?is)<[^>]+>", " ", text)
+    text = _html.unescape(text)
+    text = _re.sub(r"[ \t\r\f\v]+", " ", text)
+    text = _re.sub(r"\n{3,}", "\n\n", text).strip()
+    return text[:limit]
+
+
+def _parse_discovered_models(text: str) -> list[dict[str, str]]:
+    """Extract [{id, display_name}] robustly from an LLM JSON response."""
+    import re as _re
+
+    raw = (text or "").strip()
+    if not raw:
+        return []
+    candidates = [raw]
+    for m in _re.finditer(r"```(?:json)?\s*([\s\S]*?)```", raw, flags=_re.IGNORECASE):
+        candidates.insert(0, m.group(1).strip())
+    for opener, closer in (("{", "}"), ("[", "]")):
+        i, j = raw.find(opener), raw.rfind(closer)
+        if i != -1 and j > i:
+            candidates.append(raw[i : j + 1])
+
+    for cand in candidates:
+        try:
+            parsed = json.loads(cand)
+        except Exception:
+            continue
+        if isinstance(parsed, dict) and isinstance(parsed.get("models"), list):
+            res = _normalize_profile_models(parsed["models"])
+            if res:
+                return res
+        elif isinstance(parsed, list):
+            res = _normalize_profile_models(parsed)
+            if res:
+                return res
+    return []
+
+
 def _compose_models(
     snap: CatalogSnapshot,
     current_model: str | None,
     *,
     ttl_seconds: int,
+    profile_models: list[dict[str, str]] | None = None,
 ) -> tuple[list[str], list[dict[str, Any]], dict[str, Any]]:
-    """Merge pinned env models + cached/remote catalog + active model into UI payloads."""
+    """Merge profile custom directory + pinned env models + cached/remote catalog + active model."""
     by_id: dict[str, ModelInfo] = {m.id: m for m in snap.models}
+    custom_list = _normalize_profile_models(profile_models)
+    custom_map: dict[str, str] = {m["id"]: m["display_name"] for m in custom_list}
     pinned = _env_model_list()
-    pinned_set = set(pinned)
+    pinned_set = set(pinned) | set(custom_map.keys())
 
     ordered_ids: list[str] = []
     seen: set[str] = set()
@@ -97,6 +192,8 @@ def _compose_models(
             seen.add(mid)
             ordered_ids.append(mid)
 
+    for cm in custom_list:
+        _add(cm["id"])
     if current_model and current_model not in pinned_set and current_model not in by_id:
         _add(current_model)
     for mid in pinned:
@@ -114,18 +211,22 @@ def _compose_models(
         else:
             owned_by = mid.split("/", 1)[0] if "/" in mid else ""
             row = ModelInfo(id=mid, owned_by=owned_by).to_dict()
+        if mid in custom_map:
+            row["display_name"] = custom_map[mid]
+            row["custom"] = True
         row["pinned"] = mid in pinned_set
         entries.append(row)
 
     source = snap.source
     if source == "empty":
-        source = "env" if pinned else "fallback"
+        source = "profile" if custom_list else ("env" if pinned else "fallback")
 
     meta = {
         "source": source,
         "fetched_at": snap.fetched_at,
         "count": len(entries),
         "remote_count": len(snap.models),
+        "custom_count": len(custom_list),
         "ttl_seconds": ttl_seconds,
         "error": snap.error,
     }
@@ -207,7 +308,7 @@ _BUILTIN_SLASH_COMMANDS: list[dict[str, str]] = [
     {"name": "cockpit", "description": "Open the Cockpit monitoring drawer (`/cockpit refresh`)", "source": "builtin"},
     {"name": "diff", "description": "Open workspace Git Changes & Diff drawer", "source": "builtin"},
     {"name": "todos", "description": "Open the live Tasks checklist drawer", "source": "builtin"},
-    {"name": "cost", "description": "Show session & 7-day spend + ZenMux balance", "source": "builtin"},
+    {"name": "cost", "description": "Show session, today & 7-day token and cost usage", "source": "builtin"},
     {"name": "install", "description": "Install a Skill from a GitHub URL (`/install <url> [--global] [--plugin <pack>]`)", "source": "builtin"},
     {"name": "export", "description": "Download the current conversation as Markdown", "source": "builtin"},
     {"name": "help", "description": "List available slash commands", "source": "builtin"},
@@ -325,11 +426,15 @@ class Connection:
         self.ws = ws
         self.settings = dict(settings)
         raw_plugins = settings.get("plugins") or {}
+        self._base_plugins_enabled: list[str] | None = (
+            list(raw_plugins["enabled"]) if raw_plugins.get("enabled") is not None else None
+        )
         self.settings["plugins"] = {
             **raw_plugins,
-            "enabled": list(raw_plugins["enabled"]) if raw_plugins.get("enabled") is not None else None,
+            "enabled": list(self._base_plugins_enabled) if self._base_plugins_enabled is not None else None,
             "config": dict(raw_plugins.get("config") or {}),
         }
+        self._ws_ui_state: dict[str, Any] = {}
         self.catalog = catalog or ModelCatalog(ttl_seconds=resolve_ttl_seconds(settings))
         self.outbound: "asyncio.Queue[dict[str, Any]]" = asyncio.Queue()
         self.sink = WebSocketSink(self.outbound)
@@ -351,7 +456,17 @@ class Connection:
 
     def _build(self) -> None:
         """(Re)build the agent + session store in the current working directory,
-        preserving the chosen model/mode. Picks up the cwd's .env/.codelet/skills."""
+        preserving the chosen model/mode and restoring per-workspace plugin/tool/skill states."""
+        ws_state = _load_workspace_state(self.workspace)
+        self._ws_ui_state = dict(ws_state.get("ui") or {})
+        plugins_cfg = self.settings.setdefault("plugins", {})
+        if isinstance(ws_state.get("plugins_enabled"), list):
+            plugins_cfg["enabled"] = [str(x) for x in ws_state["plugins_enabled"] if x]
+        else:
+            plugins_cfg["enabled"] = (
+                list(self._base_plugins_enabled) if self._base_plugins_enabled is not None else None
+            )
+
         ns = SimpleNamespace(profile=None, provider=None, model=self.model, base_url=None,
                              api_key=None, mode=self.mode, effort=self.effort, max_turns=None, no_stream=False)
         config = _build_config(ns, self.settings)
@@ -367,6 +482,12 @@ class Connection:
             confirm_callback=self._confirm,
             skill_index=load_skills(),
         )
+        for tname in ws_state.get("disabled_tools") or []:
+            if isinstance(tname, str) and tname:
+                self.agent.set_tool_enabled(tname, False)
+        for sname in ws_state.get("disabled_skills") or []:
+            if isinstance(sname, str) and sname:
+                self.agent.set_skill_enabled(sname, False)
         try:
             self.store = SessionStore(project_dir=Path.cwd() / ".codelet")
         except Exception:
@@ -467,12 +588,31 @@ class Connection:
             self._resume(str(frame.get("id", "")))
         elif kind == "set_tool_enabled":
             self.agent.set_tool_enabled(str(frame.get("name", "")), bool(frame.get("enabled")))
-            self.send({"type": "tools", "tools": self.agent.tools_state()})
+            tools_st = self.agent.tools_state()
+            _save_workspace_state(
+                self.workspace,
+                {"disabled_tools": sorted(t["name"] for t in tools_st if not t.get("enabled", True))},
+            )
+            self.send({"type": "tools", "tools": tools_st})
         elif kind == "set_skill_enabled":
             self.agent.set_skill_enabled(str(frame.get("name", "")), bool(frame.get("enabled")))
-            self.send({"type": "skills", "skills": self.agent.skills_state()})
+            skills_st = self.agent.skills_state()
+            _save_workspace_state(
+                self.workspace,
+                {"disabled_skills": sorted(s["name"] for s in skills_st if not s.get("enabled", True))},
+            )
+            self.send({"type": "skills", "skills": skills_st})
         elif kind == "set_plugin_enabled":
             self._set_plugin_enabled(str(frame.get("name", "")), bool(frame.get("enabled")))
+        elif kind == "set_ui_state":
+            ui_patch: dict[str, Any] = {}
+            if isinstance(frame.get("nav_open"), dict):
+                ui_patch["nav_open"] = {str(k): bool(v) for k, v in frame["nav_open"].items()}
+            if isinstance(frame.get("ws_groups_open"), dict):
+                ui_patch["ws_groups_open"] = {str(k): bool(v) for k, v in frame["ws_groups_open"].items()}
+            if ui_patch:
+                saved = _save_workspace_state(self.workspace, {"ui": ui_patch})
+                self._ws_ui_state = dict(saved.get("ui") or {})
         elif kind == "rename_session":
             self._rename_session(str(frame.get("id", "")), str(frame.get("title", "")))
         elif kind == "delete_session":
@@ -789,8 +929,6 @@ class Connection:
             if snap.get("enabled"):
                 u = snap["usage"]
                 msg += f" | Today: ${u['today']['cost_usd']:.4f} | 7d: ${u['last_7d']['cost_usd']:.4f}"
-                if snap["balance"].get("available"):
-                    msg += f" | Balance: ${snap['balance']['total_credits']:.2f}"
                 self.send({"type": "ui_action", "open_drawer": "cockpit"})
             self.send({"type": "notice", "message": msg, "level": "info"})
             self.send({"type": "turn_done"})
@@ -916,6 +1054,7 @@ class Connection:
 
         plugins_cfg["enabled"] = cur
         self.agent.config.plugins["enabled"] = list(cur)
+        _save_workspace_state(self.workspace, {"plugins_enabled": list(cur)})
 
         self.send({"type": "plugins", "plugins": self.agent.plugins_state()})
         self.send({"type": "tools", "tools": self.agent.tools_state()})
@@ -995,27 +1134,164 @@ class Connection:
         except Exception as exc:
             self.send({"type": "error", "message": f"resume failed: {exc}"})
             return
+        snap_ws = (snapshot.get("workspace") or "").strip()
+        if snap_ws and os.path.normcase(snap_ws) != os.path.normcase(self.workspace):
+            wp = Path(snap_ws)
+            if wp.is_dir():
+                with contextlib.suppress(OSError):
+                    os.chdir(str(wp))
+                    self.workspace = os.getcwd()
+                    self._build()
+                    self.send({"type": "workspace", **self._workspace_data()})
+                    self.send({"type": "profile", **self._profile_data()})
+                    self.send({"type": "tools", "tools": self.agent.tools_state()})
+                    self.send({"type": "skills", "skills": self.agent.skills_state()})
+                    self.send({"type": "plugins", "plugins": self.agent.plugins_state()})
+                    self.send({"type": "commands", "commands": self._commands_data()})
+                    self.send({"type": "sessions_changed"})
         restore_into(self.agent, snapshot)
+        self.store = SessionStore(session_id=session_id, project_dir=Path.cwd() / ".codelet")
         self.send({"type": "resumed", "id": session_id,
                    "messages": _transcript(self.agent.context.messages)})
+
+    def reload_settings(self, new_settings: dict[str, Any], *, force_model: str | None = None) -> None:
+        """Hot-apply updated profile/API settings without losing current conversation."""
+        prev_plugins = self.settings.get("plugins")
+        self.settings = dict(new_settings)
+        if prev_plugins is not None:
+            self.settings["plugins"] = prev_plugins
+        prof = resolve_profile(self.settings, None)
+        cfg = self.agent.config
+        cfg.profile_name = prof.get("name")
+        with contextlib.suppress(KeyError, ValueError):
+            cfg.provider = LLMProvider(prof["provider"])
+        target_model = force_model or prof.get("model")
+        if target_model:
+            cfg.model = target_model
+            self.model = target_model
+        cfg.base_url = prof.get("base_url") or None
+        cfg.api_key = prof.get("api_key") or None
+        if prof.get("context_window"):
+            cfg.context_window = int(prof["context_window"])
+        with contextlib.suppress(Exception):
+            self.agent.client = build_client(cfg)
+        snap = self._catalog_snapshot()
+        self._apply_catalog_metadata(snap)
+        with contextlib.suppress(Exception):
+            self._refresh_system_prompt()
+        self.send({"type": "profile", **self._profile_data(snap)})
 
     def _profile_data(self, snap: CatalogSnapshot | None = None) -> dict[str, Any]:
         c = self.agent.config
         snap = snap if snap is not None else self._catalog_snapshot()
         model_ids, model_catalog, models_meta = _compose_models(
-            snap, c.model, ttl_seconds=self.catalog.ttl_seconds
+            snap,
+            c.model,
+            ttl_seconds=self.catalog.ttl_seconds,
+            profile_models=_active_profile_models(self.settings, c.profile_name),
         )
         return {
             "profile": c.profile_name, "provider": c.provider.value, "model": c.model,
             "base_url": c.base_url or "", "mode": c.permission_mode.value,
             "reasoning_effort": c.reasoning_effort,
+            "api_key_configured": bool(c.api_key),
             "models": model_ids, "model_catalog": model_catalog,
             "models_meta": models_meta, "user": _current_user(),
             "profiles": sorted((self.settings.get("profiles") or {}).keys()),
         }
 
     def _workspace_data(self) -> dict[str, Any]:
-        return {"cwd": self.workspace, "name": os.path.basename(self.workspace) or self.workspace}
+        return {
+            "cwd": self.workspace,
+            "name": os.path.basename(self.workspace) or self.workspace,
+            "ui_state": dict(self._ws_ui_state),
+        }
+
+
+def _workspace_states_file() -> Path:
+    return Path.home() / ".codelet" / "workspace_states.json"
+
+
+def _workspace_state_key(workspace: str) -> str:
+    try:
+        norm = str(Path(workspace).resolve())
+    except OSError:
+        norm = workspace or ""
+    return os.path.normcase(os.path.normpath(norm))
+
+
+def _load_workspace_state(workspace: str) -> dict[str, Any]:
+    path = _workspace_states_file()
+    if not path.is_file():
+        return {}
+    try:
+        all_states = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(all_states, dict):
+            return {}
+        entry = all_states.get(_workspace_state_key(workspace))
+        return dict(entry) if isinstance(entry, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _save_workspace_state(workspace: str, patch: dict[str, Any]) -> dict[str, Any]:
+    path = _workspace_states_file()
+    key = _workspace_state_key(workspace)
+    all_states: dict[str, Any] = {}
+    if path.is_file():
+        with contextlib.suppress(OSError, json.JSONDecodeError):
+            parsed = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(parsed, dict):
+                all_states = parsed
+    entry = dict(all_states.get(key) or {}) if isinstance(all_states.get(key), dict) else {}
+    for k, v in patch.items():
+        if k == "ui" and isinstance(v, dict):
+            cur_ui = dict(entry.get("ui") or {}) if isinstance(entry.get("ui"), dict) else {}
+            for uk, uv in v.items():
+                if isinstance(uv, dict) and isinstance(cur_ui.get(uk), dict):
+                    merged = dict(cur_ui[uk])
+                    merged.update(uv)
+                    cur_ui[uk] = merged
+                else:
+                    cur_ui[uk] = uv
+            entry["ui"] = cur_ui
+        else:
+            entry[k] = v
+    all_states[key] = entry
+    with contextlib.suppress(OSError):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(all_states, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return entry
+
+
+def _mask_secret(secret: str | None) -> str:
+    s = (secret or "").strip()
+    if not s:
+        return ""
+    if len(s) <= 8:
+        return "••••"
+    return f"{s[:3]}••••{s[-4:]}"
+
+
+def _user_settings_file() -> Path:
+    return Path.home() / ".codelet" / "settings.json"
+
+
+def _read_user_settings_raw() -> dict[str, Any]:
+    path = _user_settings_file()
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _write_user_settings_raw(data: dict[str, Any]) -> None:
+    path = _user_settings_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 def _current_user() -> str:
@@ -1073,10 +1349,12 @@ def create_app(
     *,
     catalog: ModelCatalog | None = None,
     auto_refresh: bool | None = None,
+    desktop_token: str | None = None,
 ) -> FastAPI:
     load_env_files()
-    settings = load_settings()
+    settings = load_settings(user_path=_user_settings_file())
     model_catalog = catalog or ModelCatalog(ttl_seconds=resolve_ttl_seconds(settings))
+    token = (desktop_token or "").strip() or None
 
     if auto_refresh is None:
         env_flag = os.environ.get("LLM_MODELS_AUTO_REFRESH", "").strip().lower()
@@ -1141,14 +1419,61 @@ def create_app(
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
 
+    def _token_ok(candidate: str | None) -> bool:
+        if not token:
+            return True
+        if not candidate:
+            return False
+        return hmac.compare_digest(candidate, token)
+
     app = FastAPI(title="codelet", lifespan=_lifespan)
     app.state.settings = settings
     app.state.catalog = model_catalog
+    app.state.desktop_token = token
+
+    if token:
+        @app.middleware("http")
+        async def _desktop_auth_middleware(request: Request, call_next: Any) -> Any:
+            path = request.url.path
+            if path in ("/", "/api/health") or path.startswith("/static/"):
+                return await call_next(request)
+            candidate = (
+                request.cookies.get(DESKTOP_COOKIE)
+                or request.headers.get("x-codelet-token")
+                or request.query_params.get("desktop_token")
+            )
+            if not _token_ok(candidate):
+                return JSONResponse({"detail": "desktop token required"}, status_code=403)
+            return await call_next(request)
+
     if STATIC_DIR.exists():
         app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
+    @app.get("/api/health")
+    def api_health() -> dict[str, Any]:
+        return {
+            "ok": True,
+            "pid": os.getpid(),
+            "cwd": os.getcwd(),
+            "desktop": bool(token),
+        }
+
     @app.get("/")
-    def index() -> Any:
+    def index(request: Request) -> Any:
+        if token:
+            q_tok = request.query_params.get("desktop_token")
+            if q_tok and _token_ok(q_tok):
+                resp = RedirectResponse(url="/", status_code=302)
+                resp.set_cookie(
+                    key=DESKTOP_COOKIE,
+                    value=token,
+                    httponly=True,
+                    samesite="strict",
+                    path="/",
+                )
+                return resp
+            if not _token_ok(request.cookies.get(DESKTOP_COOKIE)):
+                return JSONResponse({"detail": "desktop token required"}, status_code=403)
         return FileResponse(str(STATIC_DIR / "index.html"))
 
     @app.get("/api/profile")
@@ -1156,14 +1481,434 @@ def create_app(
         c = _default_config()
         snap = model_catalog.get_cached(c.base_url, provider=c.provider.value)
         model_ids, model_entries, models_meta = _compose_models(
-            snap, c.model, ttl_seconds=model_catalog.ttl_seconds
+            snap,
+            c.model,
+            ttl_seconds=model_catalog.ttl_seconds,
+            profile_models=_active_profile_models(settings, c.profile_name),
         )
         return {
             "profile": c.profile_name, "provider": c.provider.value, "model": c.model,
             "base_url": c.base_url or "", "mode": c.permission_mode.value,
+            "api_key_configured": bool(c.api_key),
             "models": model_ids, "model_catalog": model_entries,
             "models_meta": models_meta, "user": _current_user(),
             "profiles": sorted((settings.get("profiles") or {}).keys()),
+        }
+
+    def _settings_view() -> dict[str, Any]:
+        c = _default_config()
+        prof_res = resolve_profile(settings, None)
+        raw_profiles = settings.get("profiles") or {}
+        profiles_out: dict[str, dict[str, Any]] = {}
+        for pname, pentry in raw_profiles.items():
+            if not isinstance(pentry, dict):
+                continue
+            r = resolve_profile(settings, pname)
+            profiles_out[pname] = {
+                "name": pname,
+                "provider": r.get("provider") or "openai",
+                "base_url": r.get("base_url") or "",
+                "model": r.get("model") or "",
+                "api_key_env": r.get("api_key_env") or "LLM_API_KEY",
+                "api_key_configured": bool(r.get("api_key")),
+                "api_key_preview": _mask_secret(r.get("api_key")),
+                "models": _normalize_profile_models(pentry.get("models")),
+            }
+        active_name = prof_res.get("name") or "default"
+        if active_name not in profiles_out:
+            profiles_out[active_name] = {
+                "name": active_name,
+                "provider": prof_res.get("provider") or "openai",
+                "base_url": prof_res.get("base_url") or "",
+                "model": prof_res.get("model") or c.model or "",
+                "api_key_env": prof_res.get("api_key_env") or "LLM_API_KEY",
+                "api_key_configured": bool(prof_res.get("api_key")),
+                "api_key_preview": _mask_secret(prof_res.get("api_key")),
+                "models": [],
+            }
+        return {
+            "active_profile": active_name,
+            "provider": c.provider.value,
+            "base_url": c.base_url or "",
+            "model": c.model,
+            "api_key_env": prof_res.get("api_key_env") or "LLM_API_KEY",
+            "api_key_configured": bool(c.api_key),
+            "api_key_preview": _mask_secret(c.api_key),
+            "profiles": profiles_out,
+            "desktop": bool(token),
+        }
+
+    @app.get("/api/settings")
+    def api_get_settings() -> dict[str, Any]:
+        return _settings_view()
+
+    @app.post("/api/settings/apply")
+    async def api_apply_settings(request: Request) -> Any:
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"ok": False, "error": "Invalid JSON body"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"ok": False, "error": "Body must be an object"}, status_code=400)
+
+        user_raw = _read_user_settings_raw()
+        user_profiles = dict(user_raw.get("profiles") or {})
+
+        delete_name = str(body.get("delete_profile") or "").strip()
+        if delete_name:
+            user_profiles.pop(delete_name, None)
+            user_raw["profiles"] = user_profiles
+            if user_raw.get("profile") == delete_name:
+                next_name = next(iter(user_profiles.keys()), None)
+                if next_name:
+                    user_raw["profile"] = next_name
+                else:
+                    user_raw.pop("profile", None)
+            _write_user_settings_raw(user_raw)
+            fresh = load_settings(user_path=_user_settings_file())
+            settings.clear()
+            settings.update(fresh)
+            app.state.settings = settings
+            for conn in list(connections):
+                conn.reload_settings(settings)
+            return {"ok": True, **_settings_view()}
+
+        profile_name = str(body.get("profile") or "default").strip() or "default"
+        if profile_name == "_env":
+            profile_name = "default"
+        provider = str(body.get("provider") or "openai").strip().lower()
+        if provider not in ("openai", "anthropic"):
+            return JSONResponse({"ok": False, "error": f"Unsupported provider: {provider}"}, status_code=400)
+
+        base_url = str(body.get("base_url") or "").strip() or None
+        model = str(body.get("model") or "").strip() or None
+        default_env = "ANTHROPIC_API_KEY" if provider == "anthropic" else "LLM_API_KEY"
+        api_key_env = str(body.get("api_key_env") or default_env).strip() or default_env
+        if not api_key_env.isidentifier():
+            return JSONResponse({"ok": False, "error": f"Invalid env var name: {api_key_env}"}, status_code=400)
+
+        clear_key = bool(body.get("clear_api_key"))
+        raw_api_key = body.get("api_key")
+        if clear_key:
+            os.environ.pop(api_key_env, None)
+        elif isinstance(raw_api_key, str) and raw_api_key.strip():
+            # Keep API key strictly in memory (Desktop persists encrypted via DPAPI).
+            os.environ[api_key_env] = raw_api_key.strip()
+
+        # Persist ONLY non-secret profile metadata to ~/.codelet/settings.json.
+        existing = dict(user_profiles.get(profile_name) or {})
+        existing.pop("api_key", None)
+        existing["provider"] = provider
+        if base_url:
+            existing["base_url"] = base_url
+        else:
+            existing.pop("base_url", None)
+        if model:
+            existing["model"] = model
+        else:
+            existing.pop("model", None)
+        existing["api_key_env"] = api_key_env
+        if "models" in body:
+            custom_models = _normalize_profile_models(body.get("models"))
+            if custom_models:
+                existing["models"] = custom_models
+            else:
+                existing.pop("models", None)
+
+        user_profiles[profile_name] = existing
+        user_raw["profiles"] = user_profiles
+        user_raw["profile"] = profile_name
+        _write_user_settings_raw(user_raw)
+
+        fresh = load_settings(user_path=_user_settings_file())
+        settings.clear()
+        settings.update(fresh)
+        app.state.settings = settings
+
+        for conn in list(connections):
+            conn.reload_settings(settings, force_model=model)
+            c = conn.agent.config
+            if _can_fetch_models(c.base_url, c.api_key, c.provider.value):
+                with contextlib.suppress(Exception):
+                    await conn.refresh_models(force=True, notify=False)
+
+        return {"ok": True, **_settings_view()}
+
+    @app.post("/api/settings/test")
+    async def api_test_settings(request: Request) -> Any:
+        import time as _time
+        import httpx
+
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"ok": False, "error": "Invalid JSON body"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"ok": False, "error": "Body must be an object"}, status_code=400)
+
+        provider = str(body.get("provider") or "openai").strip().lower()
+        base_url = str(body.get("base_url") or "").strip()
+        api_key_env = str(body.get("api_key_env") or "").strip()
+        api_key = str(body.get("api_key") or "").strip()
+        if not api_key and api_key_env:
+            api_key = (os.environ.get(api_key_env) or "").strip()
+        if not api_key:
+            api_key = (_default_config().api_key or "").strip()
+        if not api_key:
+            return {"ok": False, "error": "尚未输入或保存 API Key"}
+
+        if provider == "anthropic":
+            root = (base_url or "https://api.anthropic.com").rstrip("/")
+            url = f"{root}/models" if root.endswith("/v1") else f"{root}/v1/models"
+            headers = {
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+                "accept": "application/json",
+            }
+        else:
+            root = (base_url or "https://api.openai.com/v1").rstrip("/")
+            url = f"{root}/models"
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "accept": "application/json",
+            }
+
+        t0 = _time.perf_counter()
+        try:
+            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+                resp = await client.get(url, headers=headers)
+            ms = int((_time.perf_counter() - t0) * 1000)
+            if resp.status_code == 200:
+                models_count: int | None = None
+                with contextlib.suppress(Exception):
+                    payload = resp.json()
+                    if isinstance(payload, dict) and isinstance(payload.get("data"), list):
+                        models_count = len(payload["data"])
+                    elif isinstance(payload, list):
+                        models_count = len(payload)
+                return {
+                    "ok": True,
+                    "latency_ms": ms,
+                    "models_count": models_count,
+                    "message": (
+                        f"连接成功 · 发现 {models_count} 个模型 · {ms} ms"
+                        if models_count is not None
+                        else f"连接成功 · {ms} ms"
+                    ),
+                }
+            if resp.status_code in (401, 403):
+                return {"ok": False, "latency_ms": ms, "error": f"鉴权失败 (HTTP {resp.status_code})，请检查 API Key"}
+            return {"ok": False, "latency_ms": ms, "error": f"接口返回 HTTP {resp.status_code} ({url})"}
+        except Exception as exc:
+            ms = int((_time.perf_counter() - t0) * 1000)
+            return {"ok": False, "latency_ms": ms, "error": f"连接失败: {type(exc).__name__}: {exc}"}
+
+    @app.post("/api/settings/discover-models")
+    async def api_discover_models(request: Request) -> Any:
+        """Discover available models for a relay/provider via /models API and/or
+        reading the relay's documentation using the currently configured model."""
+        from urllib.parse import urlparse
+        import httpx
+
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"ok": False, "error": "Invalid JSON body"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"ok": False, "error": "Body must be an object"}, status_code=400)
+
+        provider = str(body.get("provider") or "openai").strip().lower()
+        base_url = str(body.get("base_url") or "").strip()
+        model = str(body.get("model") or "").strip()
+        api_key_env = str(body.get("api_key_env") or "").strip()
+        docs_url = str(body.get("docs_url") or "").strip()
+        use_llm = bool(body.get("use_llm", True))
+
+        api_key = str(body.get("api_key") or "").strip()
+        if not api_key and api_key_env:
+            api_key = (os.environ.get(api_key_env) or "").strip()
+        if not api_key:
+            api_key = (_default_config().api_key or "").strip()
+        if not api_key:
+            return {"ok": False, "error": "请先填写并保存 API Key"}
+
+        # Stage 1: direct /models API probe
+        api_models: list[dict[str, str]] = []
+        if provider == "anthropic":
+            root = (base_url or "https://api.anthropic.com").rstrip("/")
+            models_url = f"{root}/models" if root.endswith("/v1") else f"{root}/v1/models"
+            hdrs = {"x-api-key": api_key, "anthropic-version": "2023-06-01", "accept": "application/json"}
+        else:
+            root = (base_url or "https://api.openai.com/v1").rstrip("/")
+            models_url = f"{root}/models"
+            hdrs = {"Authorization": f"Bearer {api_key}", "accept": "application/json"}
+
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+            with contextlib.suppress(Exception):
+                resp = await client.get(models_url, headers=hdrs)
+                if resp.status_code == 200:
+                    payload = resp.json()
+                    rows = payload.get("data") if isinstance(payload, dict) else (payload if isinstance(payload, list) else [])
+                    for row in rows or []:
+                        if isinstance(row, dict) and row.get("id"):
+                            mid = str(row["id"]).strip()
+                            dname = str(row.get("display_name") or row.get("name") or "").strip() or mid
+                            api_models.append({"id": mid, "display_name": dname})
+                        elif isinstance(row, str) and row.strip():
+                            api_models.append({"id": row.strip(), "display_name": row.strip()})
+                    api_models = _normalize_profile_models(api_models)
+
+            if not use_llm:
+                if api_models:
+                    return {
+                        "ok": True,
+                        "models": api_models,
+                        "source": "api",
+                        "message": f"已从接口拉取 {len(api_models)} 个模型",
+                    }
+                return {
+                    "ok": False,
+                    "error": f"接口 {models_url} 未返回模型列表，可尝试点击「AI 读文档发现」",
+                }
+
+            # Stage 2: fetch relay documentation pages in parallel
+            cand_urls: list[str] = []
+            if docs_url:
+                cand_urls.append(docs_url)
+            parsed_base = urlparse(base_url) if base_url else None
+            if parsed_base and parsed_base.scheme in ("http", "https") and parsed_base.netloc:
+                origin = f"{parsed_base.scheme}://{parsed_base.netloc}"
+                for suffix in ("/llms.txt", "/docs", "/models", "/pricing", "/"):
+                    u = origin + suffix
+                    if u not in cand_urls:
+                        cand_urls.append(u)
+
+            async def _fetch_doc(u: str) -> tuple[str, str]:
+                try:
+                    r = await client.get(
+                        u,
+                        headers={"User-Agent": "codelet-desktop/0.1", "Accept": "text/html,text/plain,application/json"},
+                        timeout=7.0,
+                    )
+                    if r.status_code == 200 and r.text:
+                        txt = _strip_html_to_text(r.text, limit=7000)
+                        if len(txt) >= 60:
+                            return u, txt
+                except Exception:
+                    pass
+                return u, ""
+
+            doc_chunks: list[str] = []
+            docs_fetched: list[str] = []
+            if cand_urls:
+                fetched = await asyncio.gather(*(_fetch_doc(u) for u in cand_urls[:5]))
+                total_len = 0
+                for u, txt in fetched:
+                    if not txt:
+                        continue
+                    docs_fetched.append(u)
+                    room = max(0, 15000 - total_len)
+                    if room < 200:
+                        break
+                    snippet = txt[:room]
+                    doc_chunks.append(f"=== Source: {u} ===\n{snippet}")
+                    total_len += len(snippet)
+
+        if not doc_chunks and not api_models:
+            return {
+                "ok": False,
+                "error": "未能从接口或默认文档路径读取到模型信息，请填写该中转站的模型文档 URL 后重试。",
+            }
+
+        target_model = model or _default_config().model
+        if not target_model:
+            return {
+                "ok": True if api_models else False,
+                "models": api_models,
+                "source": "api",
+                "docs_fetched": docs_fetched,
+                "message": f"未指定默认模型，已直接返回接口的 {len(api_models)} 个模型" if api_models else "请先填写默认模型",
+            }
+
+        # Stage 3: ask the configured model to read docs + /models list and output structured JSON
+        context_parts: list[str] = []
+        if api_models:
+            sample_ids = "\n".join(f"- {m['id']}" for m in api_models[:160])
+            context_parts.append(f"Models returned by GET /models ({len(api_models)} total):\n{sample_ids}")
+        if doc_chunks:
+            context_parts.append("Documentation excerpts fetched from the relay:\n" + "\n\n".join(doc_chunks))
+
+        sys_prompt = (
+            "You extract available LLM models from an API relay's documentation and/or /models endpoint. "
+            "Respond ONLY with valid JSON of the shape:\n"
+            '{"models": [{"id": "<exact_api_model_id>", "display_name": "<concise_readable_name>"}]}\n'
+            "Rules:\n"
+            "1. Keep exact API model IDs verbatim (never invent IDs).\n"
+            "2. Provide clean, human-readable display_name values (e.g. 'DeepSeek-V3' for 'deepseek-chat').\n"
+            "3. Deduplicate by id and order the most notable/flagship coding models first (up to 80 entries).\n"
+            "4. Output ONLY JSON with no surrounding explanation."
+        )
+        user_msg = (
+            f"Relay base_url: {base_url or '(default)'}\n\n"
+            + "\n\n".join(context_parts)
+        )
+
+        llm_models: list[dict[str, str]] = []
+        llm_err: str | None = None
+        try:
+            tmp_cfg = Config(
+                provider=LLMProvider(provider) if provider in ("openai", "anthropic") else LLMProvider.OPENAI,
+                model=target_model,
+                base_url=base_url or None,
+                api_key=api_key,
+                stream=False,
+                max_tokens=4096,
+            )
+            llm_client = build_client(tmp_cfg)
+            resp_obj = await asyncio.to_thread(
+                llm_client.chat,
+                messages=[{"role": "user", "content": user_msg}],
+                system=sys_prompt,
+                tools=[],
+                model=target_model,
+                max_tokens=4096,
+            )
+            raw_out = "".join(resp_obj.text_blocks or [])
+            llm_models = _parse_discovered_models(raw_out)
+        except Exception as exc:
+            llm_err = f"{type(exc).__name__}: {exc}"
+
+        # Merge LLM curated list first, then any remaining /models entries not covered
+        merged: list[dict[str, str]] = []
+        seen_ids: set[str] = set()
+        for m in llm_models + api_models:
+            if m["id"] not in seen_ids:
+                seen_ids.add(m["id"])
+                merged.append(m)
+
+        if not merged:
+            return {
+                "ok": False,
+                "docs_fetched": docs_fetched,
+                "error": f"未能提取到可用模型{(' (' + llm_err + ')') if llm_err else '，建议直接粘贴该中转站的模型列表文档网址重试'}",
+            }
+
+        if llm_models and api_models:
+            src = "docs+api" if docs_fetched else "llm+api"
+            msg = f"已通过 {target_model} 整理并拉取 {len(merged)} 个可用模型"
+        elif llm_models:
+            src = "docs"
+            msg = f"已通过 {target_model} 阅读文档提取 {len(merged)} 个可用模型"
+        else:
+            src = "api"
+            msg = f"已从接口直接拉取 {len(merged)} 个模型" + (f"（文档解析回退: {llm_err}）" if llm_err else "")
+
+        return {
+            "ok": True,
+            "models": merged,
+            "source": src,
+            "docs_fetched": docs_fetched,
+            "message": msg,
         }
 
     @app.get("/api/models")
@@ -1171,7 +1916,10 @@ def create_app(
         c = _default_config()
         snap = model_catalog.get_cached(c.base_url, provider=c.provider.value)
         model_ids, model_entries, models_meta = _compose_models(
-            snap, c.model, ttl_seconds=model_catalog.ttl_seconds
+            snap,
+            c.model,
+            ttl_seconds=model_catalog.ttl_seconds,
+            profile_models=_active_profile_models(settings, c.profile_name),
         )
         return {"models": model_entries, "model_ids": model_ids, "meta": models_meta}
 
@@ -1192,7 +1940,10 @@ def create_app(
                     conn._apply_catalog_metadata(snap)
                     conn.send({"type": "profile", **conn._profile_data(snap)})
         model_ids, model_entries, models_meta = _compose_models(
-            snap, c.model, ttl_seconds=model_catalog.ttl_seconds
+            snap,
+            c.model,
+            ttl_seconds=model_catalog.ttl_seconds,
+            profile_models=_active_profile_models(settings, c.profile_name),
         )
         return {"models": model_entries, "model_ids": model_ids, "meta": models_meta}
 
@@ -1243,10 +1994,14 @@ def create_app(
 
     @app.post("/api/shutdown")
     def api_shutdown() -> dict[str, str]:
-        """Stop the server (the GUI's Quit button). Exits shortly after replying."""
+        """Stop the server (the GUI's Quit button). Cleans up active plugins first."""
+        for conn in list(connections):
+            with contextlib.suppress(Exception):
+                conn.agent._applied_plugins.dispose_all(conn.agent.registry)
+
         def _bye() -> None:
             import time
-            time.sleep(0.3)
+            time.sleep(0.2)
             os._exit(0)
         import threading
         threading.Thread(target=_bye, daemon=True).start()
@@ -1254,7 +2009,13 @@ def create_app(
 
     @app.get("/api/sessions")
     def api_sessions() -> dict[str, Any]:
-        return {"project": list_project_sessions()[:20], "global": list_sessions()[:20]}
+        cur = os.getcwd()
+        return {
+            "project": list_project_sessions()[:20],
+            "global": list_sessions()[:20],
+            "current_workspace": cur,
+            "groups": list_sessions_by_workspace(current_workspace=cur),
+        }
 
     @app.get("/api/tools")
     def api_tools() -> list[dict[str, str]]:
@@ -1322,7 +2083,55 @@ def create_app(
         return out
 
     @app.get("/api/cockpit")
-    def api_cockpit() -> dict[str, Any]:
+    def api_cockpit(session_id: str = "") -> dict[str, Any]:
+        sid = (session_id or "").strip()
+        if sid and sid != "__live__":
+            from ..context import ConversationContext
+            from ..plugins.builtin.cockpit import CockpitStore
+            try:
+                snap = load_session(sid)
+            except Exception as exc:
+                return {"enabled": True, "error": f"session not found: {exc}"}
+            msgs = snap.get("messages") or []
+            sys_prompt = snap.get("system_prompt") or ""
+            tele = snap.get("telemetry") or {}
+            limit = int(settings.get("context_window") or 200_000)
+            ctx_obj = ConversationContext(config=Config(context_window=limit))
+            ctx_obj.set_system_prompt(sys_prompt)
+            ctx_obj.messages = list(msgs)
+            ctx_info = ctx_obj.breakdown()
+            ctx_info.setdefault("top_tools", [])
+            ctx_info.setdefault("total_tool_calls", 0)
+            calls = int(tele.get("calls") or 0)
+            return {
+                "enabled": True,
+                "viewing_history": True,
+                "session_id": sid,
+                "session_title": snap.get("summary") or sid,
+                "workspace": snap.get("workspace") or "",
+                "mode": snap.get("permission_mode") or "ask",
+                "context": ctx_info,
+                "cache": {
+                    "cumulative_hit_pct": 0,
+                    "latest_uncached_in": int(tele.get("input_tokens") or 0),
+                    "latest_out": int(tele.get("output_tokens") or 0),
+                    "total_uncached_in": int(tele.get("input_tokens") or 0),
+                    "total_cache_read": 0,
+                    "total_out": int(tele.get("output_tokens") or 0),
+                    "total_calls": calls,
+                },
+                "perf": {
+                    "samples": calls,
+                    "latest_latency_ms": None,
+                    "latest_speed_tps": None,
+                    "avg_latency_ms": None,
+                    "p95_latency_ms": None,
+                    "avg_speed_tps": None,
+                    "peak_speed_tps": None,
+                    "series": [],
+                },
+                "usage": CockpitStore().summary(),
+            }
         for conn in list(connections):
             return conn._cockpit_snapshot()
         from ..plugins.builtin.cockpit import CockpitStore, ZenMuxBalanceClient
@@ -1369,6 +2178,15 @@ def create_app(
 
     @app.websocket("/ws")
     async def ws(websocket: WebSocket) -> None:
+        if token:
+            ws_tok = (
+                websocket.cookies.get(DESKTOP_COOKIE)
+                or websocket.headers.get("x-codelet-token")
+                or websocket.query_params.get("desktop_token")
+            )
+            if not _token_ok(ws_tok):
+                await websocket.close(code=1008)
+                return
         await websocket.accept()
         conn = Connection(websocket, settings, catalog=model_catalog)
         connections.add(conn)
@@ -1394,11 +2212,6 @@ def create_app(
                 t = asyncio.create_task(conn.refresh_models(force=False, notify=False))
                 tasks.add(t)
                 t.add_done_callback(tasks.discard)
-            rt = getattr(conn.agent, "_cockpit", None)
-            if rt is not None and rt.balance.cached_view().get("configured"):
-                tb = asyncio.create_task(conn._send_cockpit(force_balance=True))
-                tasks.add(tb)
-                tb.add_done_callback(tasks.discard)
 
         try:
             while True:

@@ -168,7 +168,16 @@ def iter_skill_files(directory: Path) -> list[Path]:
 
 
 def builtin_skills_dir() -> Path:
-    return Path(__file__).resolve().parent / "builtin"
+    here = Path(__file__).resolve().parent / "builtin"
+    if here.is_dir():
+        return here
+    import sys
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        cand = Path(meipass) / "codelet" / "skills" / "builtin"
+        if cand.is_dir():
+            return cand
+    return here
 
 
 def load_skills(
