@@ -12,7 +12,7 @@
 
 <p>
   <img src="https://img.shields.io/static/v1?label=Version&message=v0.1.0&color=10b981&style=flat-square" alt="Version" />
-  <img src="https://img.shields.io/static/v1?label=Tests&message=335+passed&color=22c55e&style=flat-square" alt="Tests" />
+  <img src="https://img.shields.io/static/v1?label=Tests&message=342+passed&color=22c55e&style=flat-square" alt="Tests" />
   <img src="https://img.shields.io/static/v1?label=License&message=MIT&color=2563eb&style=flat-square" alt="License" />
   <img src="https://img.shields.io/static/v1?label=Python&message=3.10%2B&color=0f172a&style=flat-square" alt="Python" />
   <img src="https://img.shields.io/static/v1?label=UI&message=CLI+%7C+Web&color=0284c7&style=flat-square" alt="UI" />
@@ -58,7 +58,7 @@
 | **`/btw` 隔离侧栏问答** | 独立上下文旁路提问面板（Web 右侧 `Side /btw` Tab + CLI `/btw`），可附带主对话只读快照但**绝不污染主上下文**，即使主回合正在运行中也可以并发提问。 |
 | **动态模型目录与多 Provider** | 自动从 OpenAI 兼容端点（`GET /v1/models`）拉取最新模型目录并本地 TTL 缓存（默认 24h），带搜索、厂商分组、上下文窗口 / 价格 / Vision / Reasoning 能力标签与一键刷新；定价与上下文上限自动同步到遥测与压缩预算。 |
 | **四层上下文压缩与 SubAgent** | L0 超长输出落盘 → L1 零 LLM 清理旧工具结果 → L2 七节结构化滚动摘要（以服务商 `input_tokens` 为锚，保留 todo 列表）→ L3 保持 `tool_use/tool_result` 配对的硬上限；支持 `task` 并行子代理（深度上限 2、隔离上下文）。 |
-| **GitHub Skill 安装与自建** | 同时支持扁平 `*.md` 与目录包 `<name>/SKILL.md`（含 `scripts/`、`references/`）；贴入 GitHub 链接即可通过 `install_skill` / `/install` 拉取、自动补全 frontmatter、审计脚本安全并**热重载**；内置 **`skill-creator`** 技能，按自然语言描述即可创建并立即生效新 Skill。 |
+| **GitHub Skill 安装与 Creator** | 同时支持扁平 `*.md` 与目录包 `<name>/SKILL.md`；贴入 GitHub 链接即可通过 `install_skill` / `/install` 拉取、审计脚本安全并**热重载**；内置 **`skill-creator`** 与 **`plugin-creator`** + `create_plugin_pack`，按自然语言即可生成并原地热挂载完整插件包。 |
 
 ---
 
@@ -91,17 +91,18 @@
 
 codelet 采用清晰的两层能力架构，左侧栏直观分区、全部支持会话中热插拔：
 
-- **上层 · Plugins（功能包层）**：将一组相关的 `Tools + Skills + Commands + Middleware + TurnPolicy` 捆绑为可一键启停的功能包，支持 `*.py` 单文件、entry points 以及目录包 `.codelet/plugins/<name>/`（`plugin.py` + `skills/`，即使只放 `skills/` 也是零代码纯技能包）。
+- **上层 · Plugins（功能包层）**：将一组相关的 `Tools + Skills + Commands + Panels + Middleware + TurnPolicy` 捆绑为可一键启停的功能包，支持 `*.py` 单文件、entry points 以及目录包 `.codelet/plugins/<name>/`（`plugin.py` + `skills/`）。每个插件拥有**可逆生命周期句柄（`PluginHandle.dispose()` / `ctx.effect()`）**与可选 **`requires` 依赖拓扑排序 + 级联卸载**，Web 勾选启停直接在原 `AgentLoop` 上原地热插拔，零状态丢失；插件还可通过 `ctx.register_panel()` 向右侧 Inspector 动态注册专属 UI 面板。
 - **底层 · Base Capabilities（原子能力层）**：`Tools`（按 `Core / From plugins / Self-evolved` 分组）与 `Skills`（按 `Built-in / From plugins / Standalone · Project / Standalone · Global` 分组），支持细粒度单独开关。
 
 ### 内置插件一览
 
-| 插件 | 默认 | 捆绑工具 / 技能 / 命令 | 核心能力 |
+| 插件 | 默认 | 捆绑工具 / 技能 / 命令 / 面板 | 核心能力 |
 | :--- | :---: | :--- | :--- |
 | **`cockpit`** | ✅ 启用 | `cockpit_status` · `✦ session-diagnostics` · `/cockpit` | 上下文 5 段监控、缓存命中、速度/延迟曲线与跨会话消费统计 |
+| **`mcp`** | 可选 | `mcp__<server>__*` · `✦ mcp-usage` · `/mcp` · `◫ MCP` | 零外部依赖 MCP 桥接（支持 `stdio` 本地子进程与 `http`/SSE），卸载自动清理子进程 |
 | **`rag`** | 可选 | `search_docs` · `✦ workspace-research` · `/rag` | 本地纯 Python BM25 全文检索（无外部 embedding API 依赖） |
 | **`memory`** | 可选 | `memory` · `✦ memory-hygiene` · `/memory` | 跨会话有类型 Markdown 记忆（项目级 / 用户级），按 key 覆写、拒存密钥 |
-| **`evolve`** | 可选 | `create_tool` · `/evolve` | 自进化：Agent 缺工具时自行编写 Python 插件并热激活到运行中会话 |
+| **`evolve`** | 可选 | `create_tool` · `create_plugin_pack` · `/evolve` | 自进化与 Creator 模式：现场编写单工具或完整目录型插件包并原地热挂载 |
 | **`sandbox`** | 可选 | `sandbox` | 在一次性无网络 Docker 容器中隔离执行高风险命令（挂载 `/workspace`） |
 | **`router`** | 可选 | `TurnPolicy` | 意图路由：自动将问答 / 规划类回合收紧为只读，防止擅自改文件 |
 
@@ -191,7 +192,7 @@ flowchart LR
     end
 
     subgraph Caps["两层能力集"]
-        Plugins["Plugins · Packs<br/>cockpit / rag / memory / evolve / sandbox / router"]
+        Plugins["Plugins · Packs（可逆热插拔）<br/>cockpit / mcp / rag / memory / evolve / sandbox / router"]
         Atoms["Base Capabilities<br/>Core Tools + Skills (builtin / standalone / GitHub)"]
     end
 
@@ -226,16 +227,16 @@ codelet/
 │   ├── telemetry.py                   # Token / 缓存命中 / TTFT / P95 / tok/s / 成本统计
 │   ├── events.py                      # AgentSink 协议（CLI 与 Web 解耦边界）
 │   ├── llm/                           # Anthropic / OpenAI-compat 客户端与动态 ModelCatalog
-│   ├── plugins/                       # 插件接口、单文件/目录包发现与 6 个内置插件（含 cockpit）
-│   ├── skills/                        # 扁平 & SKILL.md 目录加载器、GitHub installer 与内置 skill-creator
+│   ├── plugins/                       # 可逆插件句柄、requires 拓扑加载与 7 个内置插件（含 cockpit / mcp）
+│   ├── skills/                        # 扁平 & SKILL.md 加载器、GitHub installer、内置 skill/plugin-creator
 │   ├── tools/                         # 核心工具（file / bash / glob / grep / web_fetch / skill / task / todo / install_skill）
 │   ├── hooks/                         # PreToolUse / PostToolUse / UserPromptSubmit shell hooks
 │   ├── persistence/                   # 原子 Session 持久化与项目级会话注册表
 │   ├── subagent/                      # 上下文隔离并行子代理
-│   └── web/                           # FastAPI + WebSocket 后端与零构建链三栏前端
+│   └── web/                           # FastAPI + WebSocket 后端与零构建链三栏前端（含动态插件面板）
 ├── evals/                             # 本地任务评测、压缩保留评测、记忆/路由评测、SWE-bench Lite 适配器
 ├── docs/                              # 架构图、时序图、技术细节、插件架构与面试 Q&A
-└── tests/                             # 335 项单元与 WebSocket 端到端测试
+└── tests/                             # 342 项单元与 WebSocket 端到端测试
 ```
 
 ---
@@ -243,7 +244,7 @@ codelet/
 ## 评测与测试
 
 ```bash
-# 运行全部单元与端到端集成测试（335 passed）
+# 运行全部单元与端到端集成测试（342 passed）
 pytest -q
 
 # 运行本地执行式任务评测（evals/tasks/*.yaml）
@@ -253,7 +254,7 @@ python -m evals.runner
 python -m evals.swebench.run_swebench --gold --limit 5
 ```
 
-- **全量回归测试**：`335 passed`（覆盖核心 Loop、权限、压缩、遥测、模型目录、Cockpit、`/btw`、思考强度、两层插件热插拔、GitHub Skill 安装器与 WebSocket 端到端流程）。
+- **全量回归测试**：`342 passed`（覆盖核心 Loop、权限、压缩、遥测、模型目录、Cockpit、MCP stdio 桥接、可逆 `dispose()` / 级联卸载、Creator 插件包、`/btw`、思考强度、GitHub Skill 安装器与 WebSocket 端到端流程）。
 - **专项评测成果**：上下文结构化压缩保留率 `59/60`（摘要输入省约 80%）；跨会话记忆纠偏遵守率 `3/20 → 19/20`；意图路由误改率 `1/16 → 0/16`；SWE-bench Lite 实测详见 [`evals/swebench/README.md`](./evals/swebench/README.md)。
 
 ---

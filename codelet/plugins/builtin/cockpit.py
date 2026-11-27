@@ -422,6 +422,7 @@ class CockpitPlugin:
 
         runtime = CockpitRuntime(ctx.host, store, balance)
         ctx.host._cockpit = runtime
+        ctx.provide("cockpit", runtime)
 
         def _on_record(row: Any) -> None:
             store.record({
@@ -435,6 +436,14 @@ class CockpitPlugin:
             })
 
         ctx.host.telemetry.on_record.append(_on_record)
+
+        def _cleanup() -> None:
+            if _on_record in ctx.host.telemetry.on_record:
+                ctx.host.telemetry.on_record.remove(_on_record)
+            if getattr(ctx.host, "_cockpit", None) is runtime:
+                ctx.host._cockpit = None
+
+        ctx.on_dispose(_cleanup)
         ctx.register_tool(CockpitStatusTool(runtime))
         ctx.register_skill(
             name="session-diagnostics",

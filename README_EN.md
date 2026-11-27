@@ -12,7 +12,7 @@
 
 <p>
   <img src="https://img.shields.io/static/v1?label=Version&message=v0.1.0&color=10b981&style=flat-square" alt="Version" />
-  <img src="https://img.shields.io/static/v1?label=Tests&message=335+passed&color=22c55e&style=flat-square" alt="Tests" />
+  <img src="https://img.shields.io/static/v1?label=Tests&message=342+passed&color=22c55e&style=flat-square" alt="Tests" />
   <img src="https://img.shields.io/static/v1?label=License&message=MIT&color=2563eb&style=flat-square" alt="License" />
   <img src="https://img.shields.io/static/v1?label=Python&message=3.10%2B&color=0f172a&style=flat-square" alt="Python" />
   <img src="https://img.shields.io/static/v1?label=UI&message=CLI+%7C+Web&color=0284c7&style=flat-square" alt="UI" />
@@ -82,9 +82,9 @@
 
 ## Two-Layer Capabilities
 
-- **Upper Layer · Plugins (`Plugins · Packs`)**: Hot-pluggable feature packs bundling `Tools + Skills + Commands + Middleware + TurnPolicy`. Supports single `*.py` files, Python entry points, and directory bundles (`.codelet/plugins/<name>/` with `plugin.py` and/or zero-code `skills/*.md`).
-  - Built-in plugins: **`cockpit`** *(default on)*, **`rag`**, **`memory`**, **`evolve`**, **`sandbox`**, **`router`**.
-- **Base Layer · Capabilities (`Tools` & `Skills`)**: Fine-grained toggles grouped by origin (`Core / From plugins / Self-evolved` for tools; `Built-in / From plugins / Standalone · Project / Standalone · Global` for skills). Newly installed skills automatically classify via plugin bundle, optional frontmatter (`plugin:` / `category:`), or zero-config standalone scope.
+- **Upper Layer · Plugins (`Plugins · Packs`)**: Hot-pluggable feature packs bundling `Tools + Skills + Commands + Dynamic UI Panels + Middleware + TurnPolicy`. Features **reversible `PluginHandle.dispose()` / `ctx.effect()`** in-place hot-plugging (zero `AgentLoop` rebuild), optional **`requires` topological ordering + cascade unmount**, and directory bundles (`.codelet/plugins/<name>/`).
+  - Built-in plugins: **`cockpit`** *(default on)*, **`mcp`** *(stdio & HTTP/SSE MCP bridge)*, **`rag`**, **`memory`**, **`evolve`** *(with `create_plugin_pack` Creator mode)*, **`sandbox`**, **`router`**.
+- **Base Layer · Capabilities (`Tools` & `Skills`)**: Fine-grained toggles grouped by origin (`Core / From plugins / Self-evolved` for tools; `Built-in / From plugins / Standalone · Project / Standalone · Global` for skills). Ships with built-in **`skill-creator`** and **`plugin-creator`** skills.
 
 ---
 
@@ -129,7 +129,7 @@ flowchart LR
     end
 
     subgraph Caps["2-Layer Capabilities"]
-        Plugins["Plugins · Packs<br/>cockpit / rag / memory / evolve / sandbox / router"]
+        Plugins["Plugins · Packs (Reversible)<br/>cockpit / mcp / rag / memory / evolve / sandbox / router"]
         Atoms["Base Capabilities<br/>Core Tools + Skills (builtin / standalone / GitHub)"]
     end
 
@@ -155,7 +155,7 @@ flowchart LR
 ## Evaluations & Tests
 
 ```bash
-pytest -q                                        # 335 passed
+pytest -q                                        # 342 passed
 python -m evals.runner                           # local task eval suite
 python -m evals.swebench.run_swebench --gold --limit 5
 ```

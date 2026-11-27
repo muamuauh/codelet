@@ -2,12 +2,16 @@
 
 ## 状态：已实现
 
-已建成（`codelet/plugins/`）：`register_tool`（同名注册会覆盖核心工具）、
+已建成（`codelet/plugins/`）：`register_tool`（同名覆盖核心工具且卸载自动还原）、
 `register_skill` / `register_skills_dir`（捆绑随插件热插拔的 Skill）、
+`register_panel`（向 Web Inspector 动态注册专属 UI 面板）、
+`provide` / `service`（跨插件共享服务）、
+`on_dispose` / `effect`（Cordis 风格可逆副作用清理，卸载或 setup 失败自动回滚）、
 `add_system_prompt_section`、`on_user_prompt`（prompt 中间件）、`wrap_tool`
-（异步的工具执行中间件）、`register_command`（`/name` 斜杠命令，返回一行状态字符串，
-CLI 与 Web GUI 都已接好），以及 `ctx.host`（指向运行中的 `AgentLoop`，供需要在会话中途
-改动系统的插件使用）。
+（异步的工具执行中间件）、`register_command`（`/name` 斜杠命令，CLI 与 Web GUI 均已接好），
+以及 `ctx.host`（指向运行中的 `AgentLoop`）。
+
+插件支持可选声明 `requires: tuple[str, ...]` 与 `conflicts: tuple[str, ...]`，加载器自动做拓扑排序并检测循环/缺失依赖；每个已挂载插件持有独立的 `PluginHandle`，支持 `agent.mount_plugin()` / `agent.unmount_plugin()` **原地热插拔**（无需重建 `AgentLoop`，卸载上游依赖时自动级联卸载下游插件）。
 
 发现渠道是 entry points（`codelet.plugins`）+ `./.codelet/plugins/` + `~/.codelet/plugins/`
 （同时支持单文件 `*.py` 与目录型功能包 `<name>/plugin.py` + `skills/*.md`，即使只放 `skills/*.md`
@@ -15,15 +19,14 @@ CLI 与 Web GUI 都已接好），以及 `ctx.host`（指向运行中的 `AgentL
 出错都被隔离，不会拖垮 agent。**子 agent 会继承**父级的 tool/prompt 中间件、system-prompt 段和命令
 （插件注册的工具则通过复制的 registry 一并带过去）。
 
-尚未实现：provider 注册（`register_provider`）与插件的 `shutdown` 生命周期钩子。
-
 ### 内置插件（随 codelet 发布，但只在显式启用时加载）
 
-`codelet/plugins/builtin/` 下有六个参考实现（其中 `cockpit` 在项目 `.codelet/settings.json` 中默认启用）。它们**绝不会被自动发现** —— 必须在 settings.json 里点名启用：
+`codelet/plugins/builtin/` 下有七个参考实现（其中 `cockpit` 在项目 `.codelet/settings.json` 中默认启用）。它们**绝不会被自动发现** —— 必须在 settings.json 里点名启用：
 
 ```json
-{"plugins": {"enabled": ["cockpit", "sandbox", "rag", "evolve", "memory", "router"],
+{"plugins": {"enabled": ["cockpit", "mcp", "sandbox", "rag", "evolve", "memory", "router"],
              "config": {"cockpit": {"balance_ttl_seconds": 300},
+                        "mcp": {"servers": {"demo": {"transport": "stdio", "command": ["python", "srv.py"]}}},
                         "sandbox": {"image": "python:3.12-slim", "network": false},
                         "rag": {"inject": false, "top_k": 3},
                         "evolve": {"dir": ".codelet/evolved"},
@@ -31,18 +34,14 @@ CLI 与 Web GUI 都已接好），以及 `ctx.host`（指向运行中的 `AgentL
                         "router": {"llm": false}}}}
 ```
 
-- **cockpit** —— 实时可观测与按量余额插件（默认启用）：提供只读工具 `cockpit_status`、配套技能 `session-diagnostics` 与 `/cockpit` 命令；驱动 Web 右侧 Cockpit 面板展示上下文 5 段环形占用、缓存命中率、TTFT/P95/tok/s 24 轮趋势、跨会话本地消费统计（`~/.codelet/cockpit_usage.jsonl`）以及 ZenMux PAYG 实时账户余额（配置可选的 `ZENMUX_MANAGEMENT_API_KEY` 时自动查询 `GET {base_url}/management/payg/balance`，未配置时优雅降级为本地消费看板）。
+- **cockpit** —— 实时可观测插件（默认启用）：提供只读工具 `cockpit_status`、配套技能 `session-diagnostics`、服务 `cockpit` 与 `/cockpit` 命令；驱动 Web 右侧 Cockpit 面板展示上下文 5 段环形占用、缓存命中率、TTFT/P95/tok/s 24 轮趋势与跨会话消费统计；卸载时自动通过 `on_dispose` 清理遥测回调。
+- **mcp** —— 外部 MCP Server 桥接插件（零额外依赖）：原生支持 `stdio`（本地子进程）与 `http`（Streamable HTTP / SSE）JSON-RPC 2.0 协议，自动握手并将外部工具桥接为 `mcp__<server>__<tool>`（遵循 `readOnlyHint`），附带 `/mcp` 命令、配套技能 `mcp-usage` 以及动态注册到 Web 右侧 Inspector 的 **`MCP` 状态面板**；关闭插件或断开连接时自动终止所有子进程。
 - **sandbox** —— 新增一个**独立的** `sandbox` 工具，每条命令都在一次性 Docker 容器里执行，
   工作区挂载到 `/workspace`，默认无网络。核心的 `bash`（宿主机）原样保留，由模型按命令自行
-  选择用哪个。真正的容器级隔离；需要 Docker；每次调用都是全新容器（有依赖关系的步骤请用
-  `&&` 串起来）。
-- **rag** —— 提供 `search_docs(query, k)` 工具（对工作区文件分块做 BM25，纯 Python，不调用任何
-  embedding API）、配套技能 `workspace-research`、`/rag` 命令（重建索引并报告统计），以及在 `"inject": true` 时启用的 prompt
-  中间件（把最相关的片段拼到每条消息前）。工作区切换时索引会自动重建。
-- **evolve** —— 自进化：提供 `create_tool` 元工具，让 agent 在对话中途自己写一个新工具并热加载
-  进当前会话。见下方[自进化](#自进化agent-自己长出工具)。
-- **memory** —— 跨会话记忆：提供 `memory` 工具（view / write / delete）、配套技能 `memory-hygiene` 和 `/memory` 命令，把记忆的
-  索引放进系统提示词。见下方[记忆](#记忆下一次会话该知道的少量事实)。
+  选择用哪个。
+- **rag** —— 提供 `search_docs(query, k)` 工具（纯 Python BM25）、配套技能 `workspace-research`、`/rag` 命令，以及可选的 `"inject": true` prompt 中间件。
+- **evolve** —— 自进化与 Creator 模式：提供 `create_tool`（单工具热激活）与 **`create_plugin_pack`**（一键生成 `.codelet/plugins/<name>/` 目录型插件包并原地热挂载，配合内置 `plugin-creator` 技能使用）。见下方[自进化](#自进化agent-自己长出工具)。
+- **memory** —— 跨会话记忆：提供 `memory` 工具（view / write / delete）、配套技能 `memory-hygiene` 和 `/memory` 命令。见下方[记忆](#记忆下一次会话该知道的少量事实)。
 - **router** —— 意图路由：把「只是在问」的一轮设成只读。见下方[意图路由](#意图路由只是在问的时候不改文件)。
 
 ## 两层能力集架构（Plugins · Packs / Base Capabilities）

@@ -166,6 +166,10 @@ details.nav[open] > summary .chev { transform: rotate(180deg); }
   background: var(--panel); border: 1px solid var(--border); color: var(--muted); }
 .p-chip.cmd { color: var(--accent); }
 .p-chip.skill { color: #a855f7; border-color: color-mix(in srgb, #a855f7 38%, var(--border)); }
+.p-chip.panel { color: var(--info); border-color: color-mix(in srgb, var(--info) 40%, var(--border)); }
+.p-chip.req { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 38%, var(--border)); }
+.p-chip.warn { color: var(--err); border-color: color-mix(in srgb, var(--err) 40%, var(--border)); }
+.plugin-pane-body { display: flex; flex-direction: column; gap: 10px; }
 
 .side-foot { border-top: 1px solid var(--border); padding: 11px 13px; display: flex; align-items: center; gap: 9px; }
 .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--warn); flex: none; transition: background .2s, box-shadow .2s; }

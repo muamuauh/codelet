@@ -34,8 +34,8 @@ DEFAULT_DIR = ".codelet/evolved"
 # core capabilities the loop depends on. (Overriding e.g. `bash` is a job for a
 # deliberate plugin, not an in-conversation improvisation.)
 PROTECTED_NAMES = {
-    "create_tool", "bash", "read_file", "write_file", "edit_file",
-    "glob", "grep", "task", "skill", "todo_write", "web_fetch",
+    "create_tool", "create_plugin_pack", "bash", "read_file", "write_file", "edit_file",
+    "glob", "grep", "task", "skill", "todo_write", "web_fetch", "install_skill",
 }
 
 _FILE_HEADER = '''"""Evolved tool `{name}`, authored by codelet's self-evolution.
@@ -258,12 +258,260 @@ class CreateToolTool(Tool):
         )
 
 
+_PACK_PLUGIN_TEMPLATE = '''"""Plugin pack `{pack_name}` created via codelet Creator mode.
+
+{description}
+"""
+from __future__ import annotations
+
+from typing import Any
+
+from codelet.plugins.base import PluginContext
+from codelet.tools.base import Tool, ToolResult
+
+{tools_code}
+
+class {pack_cls}:
+    name = {pack_name!r}
+    description = {description!r}
+    requires = {requires!r}
+
+    def setup(self, ctx: PluginContext) -> None:
+{setup_lines}
+
+
+PLUGIN = {pack_cls}()
+'''
+
+
+def render_plugin_pack_source(
+    pack_name: str,
+    description: str,
+    tools: list[dict[str, Any]],
+    *,
+    requires: tuple[str, ...] = (),
+    command_name: str = "",
+    command_reply: str = "",
+) -> str:
+    """Render a clean directory-bundle `plugin.py` containing 0+ tools & optional command."""
+    tool_blocks: list[str] = []
+    setup_lines: list[str] = []
+
+    for spec in tools:
+        tname = str(spec["name"]).strip()
+        tdesc = str(spec.get("description") or tname).strip()
+        schema = _normalize_schema(spec.get("parameters"))
+        code = textwrap.indent(textwrap.dedent(str(spec.get("code") or "return None")).strip(), "        ")
+        cls = _camel(tname)
+        ro = bool(spec.get("read_only", False))
+        tool_blocks.append(
+            f"class {cls}(Tool):\n"
+            f"    read_only = {ro!r}\n\n"
+            f"    @property\n"
+            f"    def name(self) -> str:\n"
+            f"        return {tname!r}\n\n"
+            f"    @property\n"
+            f"    def description(self) -> str:\n"
+            f"        return {tdesc!r}\n\n"
+            f"    @property\n"
+            f"    def input_schema(self) -> dict[str, Any]:\n"
+            f"        return {schema!r}\n\n"
+            f"    def execute(self, params: dict[str, Any]) -> ToolResult:\n"
+            f"        try:\n"
+            f"            res = self._run(params)\n"
+            f"        except Exception as exc:\n"
+            f"            return ToolResult(output=f\"{tname} raised: {{exc!r}}\", is_error=True)\n"
+            f"        if isinstance(res, ToolResult):\n"
+            f"            return res\n"
+            f"        return ToolResult(output=\"(no output)\" if res is None else str(res))\n\n"
+            f"    def _run(self, params: dict[str, Any]) -> Any:\n"
+            f"{code}\n"
+        )
+        setup_lines.append(f"        ctx.register_tool({cls}())")
+
+    if command_name.strip():
+        cname = command_name.strip().lstrip("/")
+        creply = command_reply.strip() or f"[{pack_name}] active"
+        setup_lines.append(f"        ctx.register_command({cname!r}, lambda args: {creply!r})")
+
+    if not setup_lines:
+        setup_lines.append("        pass")
+
+    pack_cls = "".join(p.capitalize() for p in re.split(r"[^0-9A-Za-z]+", pack_name) if p) + "PackPlugin"
+    return _PACK_PLUGIN_TEMPLATE.format(
+        pack_name=pack_name,
+        description=description.strip() or f"Plugin pack {pack_name}",
+        tools_code="\n\n".join(tool_blocks),
+        pack_cls=pack_cls,
+        requires=tuple(requires),
+        setup_lines="\n".join(setup_lines),
+    )
+
+
+class CreatePluginPackTool(Tool):
+    """Creator-mode meta-tool: author a complete directory plugin pack
+    (`.codelet/plugins/<pack>/plugin.py` + optional `skills/<skill>/SKILL.md`)
+    and hot-mount it into the live session via `host.mount_plugin()`."""
+
+    read_only = False
+    confirm_in_ask = True
+
+    def __init__(self, host: Any, plugins_dir: Path | None = None) -> None:
+        self._host = host
+        self._plugins_dir = plugins_dir
+
+    @property
+    def name(self) -> str:
+        return "create_plugin_pack"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Create a complete hot-pluggable directory plugin pack under `.codelet/plugins/<name>/` "
+            "bundling one or more Python tools, an optional slash command, and optional SKILL.md workflows, "
+            "then hot-mount it immediately into the running session."
+        )
+
+    @property
+    def input_schema(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "kebab-case or snake_case pack name (e.g. 'sql-kit')."},
+                "description": {"type": "string", "description": "One-line summary of the plugin pack."},
+                "requires": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional plugin names this pack depends on (e.g. ['memory']).",
+                },
+                "tools": {
+                    "type": "array",
+                    "description": "Optional list of tools: [{name, description, parameters, code, read_only?}].",
+                    "items": {"type": "object"},
+                },
+                "skills": {
+                    "type": "array",
+                    "description": "Optional list of bundled skills: [{name, description, body, category?}].",
+                    "items": {"type": "object"},
+                },
+                "command_name": {"type": "string", "description": "Optional slash command name (without '/')."},
+                "command_reply": {"type": "string", "description": "Optional status text returned by the command."},
+                "overwrite": {"type": "boolean", "description": "Replace existing pack directory (default false)."},
+            },
+            "required": ["name", "description"],
+        }
+
+    def _base_dir(self) -> Path:
+        return self._plugins_dir if self._plugins_dir is not None else (Path.cwd() / ".codelet" / "plugins")
+
+    def _validate(self, params: dict[str, Any]) -> tuple[str, str, list[dict[str, Any]], list[dict[str, Any]], tuple[str, ...]] | str:
+        raw_name = str(params.get("name") or "").strip()
+        pack = re.sub(r"[^a-zA-Z0-9_-]+", "-", raw_name.lower()).strip("-_")
+        if not pack:
+            return "Error: 'name' is required."
+        desc = str(params.get("description") or "").strip()
+        if not desc:
+            return "Error: 'description' is required."
+        tools = list(params.get("tools") or [])
+        skills = list(params.get("skills") or [])
+        if not tools and not skills:
+            return "Error: provide at least one tool or one skill in the plugin pack."
+        for t in tools:
+            tname = str(t.get("name") or "").strip()
+            if not tname.isidentifier() or keyword.iskeyword(tname):
+                return f"Error: invalid tool identifier '{tname}'."
+            if tname in PROTECTED_NAMES:
+                return f"Error: '{tname}' is a protected core tool."
+        reqs = tuple(str(r).strip() for r in (params.get("requires") or []) if str(r).strip())
+        if not bool(params.get("overwrite", False)) and (self._base_dir() / pack).exists():
+            return f"Error: plugin pack '{pack}' already exists; pass overwrite=true to replace."
+        return pack, desc, tools, skills, reqs
+
+    def preview_diff(self, params: dict[str, Any]) -> str | None:
+        parsed = self._validate(params)
+        if isinstance(parsed, str):
+            return None
+        pack, desc, tools, skills, reqs = parsed
+        parts = [f"# .codelet/plugins/{pack}/  (new hot-pluggable plugin pack)"]
+        if tools or params.get("command_name"):
+            src = render_plugin_pack_source(
+                pack, desc, tools, requires=reqs,
+                command_name=str(params.get("command_name") or ""),
+                command_reply=str(params.get("command_reply") or ""),
+            )
+            parts.append(f"\n--- plugin.py ---\n{src}")
+        for sk in skills:
+            sname = str(sk.get("name") or "skill").strip()
+            parts.append(f"\n--- skills/{sname}/SKILL.md ---\n{sk.get('description', '')}\n{sk.get('body', '')}")
+        return "\n".join(parts)
+
+    def execute(self, params: dict[str, Any]) -> ToolResult:
+        parsed = self._validate(params)
+        if isinstance(parsed, str):
+            return ToolResult(output=parsed, is_error=True)
+        pack, desc, tools, skills, reqs = parsed
+
+        src: str | None = None
+        if tools or params.get("command_name"):
+            src = render_plugin_pack_source(
+                pack, desc, tools, requires=reqs,
+                command_name=str(params.get("command_name") or ""),
+                command_reply=str(params.get("command_reply") or ""),
+            )
+            try:
+                compile(src, f"<plugin-pack:{pack}>", "exec")
+            except SyntaxError as exc:
+                return ToolResult(output=f"Generated plugin.py failed to compile: {exc}", is_error=True)
+
+        pack_dir = self._base_dir() / pack
+        pack_dir.mkdir(parents=True, exist_ok=True)
+        written: list[str] = []
+        if src is not None:
+            p_file = pack_dir / "plugin.py"
+            p_file.write_text(src, encoding="utf-8")
+            written.append(str(p_file))
+
+        for sk in skills:
+            sname = re.sub(r"[^a-zA-Z0-9_-]+", "-", str(sk.get("name") or "").strip().lower()).strip("-_")
+            sdesc = str(sk.get("description") or "").strip()
+            sbody = str(sk.get("body") or "").strip()
+            scat = str(sk.get("category") or "").strip()
+            if not sname or not sdesc:
+                continue
+            sdir = pack_dir / "skills" / sname
+            sdir.mkdir(parents=True, exist_ok=True)
+            cat_line = f"category: {scat}\n" if scat else ""
+            sfile = sdir / "SKILL.md"
+            sfile.write_text(
+                f"---\nname: {sname}\ndescription: {sdesc}\n{cat_line}---\n\n{sbody}\n",
+                encoding="utf-8",
+            )
+            written.append(str(sfile))
+
+        if self._host is not None and hasattr(self._host, "mount_plugin"):
+            if bool(params.get("overwrite", False)):
+                self._host.unmount_plugin(pack)
+            ok, msg = self._host.mount_plugin(pack, plugin_dirs=[self._base_dir()])
+            if not ok:
+                return ToolResult(
+                    output=f"Created pack at {pack_dir} ({len(written)} files) but mount reported: {msg}",
+                    is_error=True,
+                )
+            return ToolResult(
+                output=f"Created and hot-mounted plugin pack '{pack}' ({len(written)} files at {pack_dir}). "
+                       "Its tools and skills are live now."
+            )
+        return ToolResult(output=f"Created plugin pack '{pack}' at {pack_dir} ({len(written)} files).")
+
+
 class EvolvePlugin:
     name = "evolve"
 
     def setup(self, ctx: PluginContext) -> None:
         evolved_dir = Path(str(ctx.config.get("dir") or DEFAULT_DIR))
+        plugins_dir = Path(str(ctx.config["plugins_dir"])) if ctx.config.get("plugins_dir") else None
         ctx.register_tool(CreateToolTool(ctx.host, evolved_dir))
+        ctx.register_tool(CreatePluginPackTool(ctx.host, plugins_dir))
         ctx.add_system_prompt_section(PROMPT_SECTION)
         ctx.register_command("evolve", lambda args: self._cmd(evolved_dir, args))
         # Re-load previously evolved tools so they persist across sessions.

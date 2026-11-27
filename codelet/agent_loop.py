@@ -385,15 +385,30 @@ class AgentLoop:
             self._sink.notice(f"plugins skipped: {exc}", level="dim")
             return
         self._applied_plugins = applied
-        enabled_set = set(applied.names)
-        for tname, origin in applied.tool_origins.items():
-            self._tool_origins.setdefault(tname, origin)
+        self._sync_from_applied(reload_disk_skills=False)
 
-        # Standalone skills that explicitly declare `plugin: <name>` in frontmatter
-        # follow that plugin's enabled/disabled lifecycle.
+    def _sync_from_applied(self, *, reload_disk_skills: bool = False) -> None:
+        """Synchronize loop middleware, origins, skills, and system prompt from
+        `self._applied_plugins` (used on startup and in-place hot mount/unmount)."""
+        applied = self._applied_plugins
+        enabled_set = set(applied.names)
+
+        # Preserve evolved origins while updating plugin-owned tool origins.
+        evolved_origins = {k: v for k, v in self._tool_origins.items() if v == "evolved"}
+        self._tool_origins = {**evolved_origins, **applied.tool_origins}
+
+        if reload_disk_skills:
+            self.skill_index = load_skills()
+
+        self._skill_origins = {}
+        # Remove stale plugin-bundled skills from previous mount state.
         for sname in list(self.skill_index.names()):
             sk = self.skill_index.get(sname)
-            if sk is not None and sk.plugin:
+            if sk is None:
+                continue
+            if sk.scope == "plugin" and (sk.plugin not in enabled_set):
+                self.skill_index.remove(sname)
+            elif sk.plugin:
                 if sk.plugin not in enabled_set:
                     self.skill_index.remove(sname)
                 else:
@@ -403,22 +418,100 @@ class AgentLoop:
                     if sname not in sk_list:
                         sk_list.append(sname)
 
-        # Register plugin-bundled skills (project/user overrides with same name win).
+        # Register active plugin-bundled skills (project/user overrides with same name win).
         for sk in applied.skills:
             if sk.name not in self.skill_index.skills:
                 self.skill_index.add(sk)
             if sk.plugin:
                 self._skill_origins.setdefault(sk.name, sk.plugin)
 
-        # If plugins introduced the first skill(s), expose the `skill` loader tool.
-        if self.skill_index.names() and self.registry.get("skill") is None:
+        if self.skill_index.names():
+            self.registry.unregister("skill")
             self.registry.register(SkillTool(self.skill_index))
 
-        self._prompt_sections = applied.prompt_sections
-        self._prompt_middleware = applied.prompt_middleware
-        self._tool_middleware = applied.tool_middleware
-        self._plugin_commands = applied.commands
-        self._turn_policies = applied.turn_policies
+        self._prompt_sections = list(applied.prompt_sections)
+        self._prompt_middleware = list(applied.prompt_middleware)
+        self._tool_middleware = list(applied.tool_middleware)
+        self._plugin_commands = dict(applied.commands)
+        self._turn_policies = list(applied.turn_policies)
+
+    def mount_plugin(
+        self,
+        name: str,
+        config: dict[str, Any] | None = None,
+        *,
+        plugin_dirs: list[Path] | None = None,
+    ) -> tuple[bool, str]:
+        """Hot-mount a plugin in place without rebuilding the AgentLoop.
+
+        Returns `(ok, message)`.
+        """
+        from .plugins.loader import resolve_plugin
+
+        if name in self._applied_plugins.handles and self._applied_plugins.handles[name].active:
+            return True, f"plugin '{name}' is already enabled"
+
+        plugin = resolve_plugin(name, plugin_dirs=plugin_dirs)
+        if plugin is None:
+            return False, f"plugin '{name}' not found"
+
+        per_cfg = (self.config.plugins.get("config") or {}).get(name, {})
+        merged_cfg = {**per_cfg, **(config or {})}
+        handle = self._applied_plugins.mount_instance(
+            name, plugin, self.registry, merged_cfg, host=self
+        )
+        if handle is None:
+            reason = self._applied_plugins.skipped.get(name, "mount failed")
+            return False, f"could not enable '{name}': {reason}"
+
+        self._sync_from_applied(reload_disk_skills=True)
+        self.rebuild_system_prompt()
+        return True, f"enabled plugin '{name}'"
+
+    def unmount_plugin(self, name: str) -> list[str]:
+        """Hot-unmount a plugin in place via its reversible `PluginHandle.dispose()`,
+        cascade-unmounting any active plugins that depend on it."""
+        unmounted = self._applied_plugins.unmount(name, self.registry)
+        if unmounted:
+            self._sync_from_applied(reload_disk_skills=True)
+            self.rebuild_system_prompt()
+        return unmounted
+
+    def panels_state(self) -> list[dict[str, Any]]:
+        """List dynamic UI panels registered by currently active plugins."""
+        return [
+            {
+                "id": p.id,
+                "title": p.title,
+                "plugin": p.plugin,
+                "description": p.description,
+            }
+            for p in self._applied_plugins.panels.values()
+        ]
+
+    def render_panel(self, panel_id: str) -> dict[str, Any] | None:
+        """Invoke a plugin panel's `render()` callback and return its payload."""
+        panel = self._applied_plugins.panels.get(panel_id)
+        if panel is None:
+            return None
+        try:
+            data = panel.render()
+            if not isinstance(data, dict):
+                data = {"markdown": str(data)}
+            return {
+                "id": panel.id,
+                "title": panel.title,
+                "plugin": panel.plugin,
+                "description": panel.description,
+                **data,
+            }
+        except Exception as exc:
+            return {
+                "id": panel.id,
+                "title": panel.title,
+                "plugin": panel.plugin,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
 
     def reload_skills(self) -> list[str]:
         """Hot-reload disk skills + active plugin skills and refresh system prompt.
@@ -426,33 +519,7 @@ class AgentLoop:
         Called automatically after `install_skill` or writing into `.codelet/skills/`
         so newly installed or created skills become usable on the very next turn.
         """
-        fresh = load_skills()
-        applied = self._applied_plugins
-        enabled_set = set(applied.names)
-        self._skill_origins = {}
-
-        for sname in list(fresh.names()):
-            sk = fresh.get(sname)
-            if sk is not None and sk.plugin:
-                if sk.plugin not in enabled_set:
-                    fresh.remove(sname)
-                else:
-                    self._skill_origins[sname] = sk.plugin
-                    det = applied.details.setdefault(sk.plugin, {})
-                    sk_list = det.setdefault("skills", [])
-                    if sname not in sk_list:
-                        sk_list.append(sname)
-
-        for sk in applied.skills:
-            if sk.name not in fresh.skills:
-                fresh.add(sk)
-            if sk.plugin:
-                self._skill_origins.setdefault(sk.name, sk.plugin)
-
-        self.skill_index = fresh
-        if self.skill_index.names():
-            self.registry.unregister("skill")
-            self.registry.register(SkillTool(self.skill_index))
+        self._sync_from_applied(reload_disk_skills=True)
         self.rebuild_system_prompt()
         return self.skill_index.names()
 

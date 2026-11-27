@@ -244,6 +244,8 @@ function render(ev) {
     case "commands": availableCommands = Array.isArray(ev.commands) ? ev.commands : []; return;
     case "todos": return renderTodos(ev.todos || []);
     case "cockpit": return onCockpit(ev);
+    case "panels": return syncPluginPanels(ev.panels || []);
+    case "panel_data": return renderPluginPanelData(ev);
     case "ui_action": return onUiAction(ev);
     case "export_markdown": return downloadMarkdown(ev.filename || "codelet.md", ev.content || "");
     case "btw_start": return onBtwStart(ev);
@@ -370,6 +372,96 @@ function switchInspectorTab(tab) {
   if (tab === "cockpit") send({ type: "get_cockpit" });
   else if (tab === "changes") loadGitChanges();
   else if (tab === "btw") setTimeout(() => $("btw-input")?.focus(), 40);
+  else if (tab && tab.startsWith("plugin:")) send({ type: "render_panel", id: tab.slice(7) });
+}
+
+// ---------- Dynamic plugin UI panels ----------
+function syncPluginPanels(panels) {
+  const tabBar = document.querySelector(".insp-tabs");
+  const insp = $("inspector");
+  if (!tabBar || !insp) return;
+  const keepIds = new Set(panels.map((p) => "plugin:" + p.id));
+
+  // Remove tabs/panes belonging to unmounted plugins.
+  tabBar.querySelectorAll(".insp-tab[data-dynamic='1']").forEach((btn) => {
+    if (!keepIds.has(btn.dataset.tab)) btn.remove();
+  });
+  insp.querySelectorAll(".insp-pane[data-dynamic='1']").forEach((pane) => {
+    if (!keepIds.has(pane.dataset.pane)) pane.remove();
+  });
+  if (activeInspectorTab.startsWith("plugin:") && !keepIds.has(activeInspectorTab)) {
+    switchInspectorTab("cockpit");
+  }
+
+  panels.forEach((p) => {
+    const key = "plugin:" + p.id;
+    let btn = tabBar.querySelector(`.insp-tab[data-tab="${CSS.escape(key)}"]`);
+    if (!btn) {
+      btn = el("button", "insp-tab", p.title || p.id);
+      btn.type = "button";
+      btn.dataset.tab = key;
+      btn.dataset.dynamic = "1";
+      btn.setAttribute("role", "tab");
+      if (p.description) btn.title = p.description;
+      btn.addEventListener("click", () => switchInspectorTab(key));
+      tabBar.appendChild(btn);
+    }
+    let pane = insp.querySelector(`.insp-pane[data-pane="${CSS.escape(key)}"]`);
+    if (!pane) {
+      pane = el("section", "insp-pane plugin-pane");
+      pane.dataset.pane = key;
+      pane.dataset.dynamic = "1";
+      const bar = el("div", "changes-bar");
+      bar.appendChild(el("span", "git-branch mono", `${p.plugin || "plugin"} · ${p.title || p.id}`));
+      const refBtn = el("button", "ck-mini-btn", "刷新");
+      refBtn.type = "button";
+      refBtn.onclick = () => send({ type: "render_panel", id: p.id });
+      bar.appendChild(refBtn);
+      pane.appendChild(bar);
+      pane.appendChild(el("div", "plugin-pane-body"));
+      insp.appendChild(pane);
+    }
+    if (activeInspectorTab === key) {
+      btn.classList.add("active");
+      pane.classList.add("active");
+      send({ type: "render_panel", id: p.id });
+    }
+  });
+}
+
+function renderPluginPanelData(ev) {
+  const key = "plugin:" + (ev.id || "");
+  const pane = document.querySelector(`.insp-pane[data-pane="${CSS.escape(key)}"] .plugin-pane-body`);
+  if (!pane) return;
+  pane.innerHTML = "";
+  if (ev.error) {
+    pane.appendChild(el("div", "note error", ev.error));
+    return;
+  }
+  if (Array.isArray(ev.sections)) {
+    ev.sections.forEach((sec) => {
+      const card = el("div", "ck-card");
+      card.appendChild(el("div", "ck-toggle", sec.title || ""));
+      const body = el("div", "ck-body");
+      (sec.items || []).forEach((it) => {
+        const row = el("div", "kv");
+        row.appendChild(el("span", "kv-k", it.label || ""));
+        const val = el("span", "kv-v" + (it.mono ? " mono" : "") + (it.badge === "ok" ? " good" : ""), it.value || "");
+        row.appendChild(val);
+        body.appendChild(row);
+      });
+      card.appendChild(body);
+      pane.appendChild(card);
+    });
+    return;
+  }
+  if (ev.markdown) {
+    const box = el("div", "ck-card md");
+    box.innerHTML = renderMarkdown(ev.markdown);
+    pane.appendChild(box);
+    return;
+  }
+  pane.appendChild(el("pre", "diff", JSON.stringify(ev, null, 2)));
 }
 $("toggle-inspector").addEventListener("click", () => {
   if ($("app").classList.contains("insp-open")) closeInspector();
@@ -1459,11 +1551,14 @@ function renderPluginsList(rows) {
     main.appendChild(el("div", "p-name", p.name));
     if (p.description) main.appendChild(el("div", "p-desc", p.description));
     const chips = el("div", "p-chips");
+    (p.requires || []).forEach((r) => chips.appendChild(el("span", "p-chip req", "req:" + r)));
     (p.tools || []).forEach((t) => chips.appendChild(el("span", "p-chip", t)));
     (p.skills || []).forEach((s) => chips.appendChild(el("span", "p-chip skill", "✦ " + s)));
+    (p.panels || []).forEach((pn) => chips.appendChild(el("span", "p-chip panel", "◫ " + (pn.title || pn.id))));
     (p.commands || []).forEach((c) => chips.appendChild(el("span", "p-chip cmd", "/" + c)));
     if (p.has_turn_policy) chips.appendChild(el("span", "p-chip", "turn policy"));
     if (p.has_middleware) chips.appendChild(el("span", "p-chip", "middleware"));
+    if (p.skipped_reason) chips.appendChild(el("span", "p-chip warn", p.skipped_reason));
     if (chips.children.length) main.appendChild(chips);
     li.appendChild(cb); li.appendChild(main); ul.appendChild(li);
   });

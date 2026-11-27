@@ -491,6 +491,12 @@ class Connection:
             self.send({"type": "btw_cleared"})
         elif kind == "get_cockpit":
             await self._send_cockpit(force_balance=False)
+        elif kind == "render_panel":
+            pid = str(frame.get("id", "")).strip()
+            if pid:
+                payload = self.agent.render_panel(pid)
+                if payload is not None:
+                    self.send({"type": "panel_data", **payload})
         elif kind == "refresh_balance":
             await self._send_cockpit(force_balance=True)
         elif kind == "set_context_limit":
@@ -553,10 +559,12 @@ class Connection:
             return
         self.busy = True
         self._active_turn_task = asyncio.current_task()
-        # Snapshot the tool & skill sets so we can refresh the sidebar if the turn
-        # changed them (`create_tool`, `install_skill`, or `skill-creator`).
+        # Snapshot tool, skill & panel sets so we can refresh the sidebar/inspector
+        # if the turn changed them (`create_tool`, `create_plugin_pack`, `install_skill`, `skill-creator`).
         tools_before = set(self.agent.registry.names())
         skills_before = {(s["name"], s["source"], s.get("category", "")) for s in self.agent.skills_state()}
+        panels_before = [p["id"] for p in self.agent.panels_state()]
+        plugins_before = [p["name"] for p in self.agent.plugins_state() if p["enabled"]]
         try:
             await self.agent.run_async(prompt, images=images or None)
             self.send({"type": "telemetry", **self.agent.telemetry.snapshot()})
@@ -575,9 +583,15 @@ class Connection:
             if set(self.agent.registry.names()) != tools_before:
                 self.send({"type": "tools", "tools": self.agent.tools_state()})
             skills_after = self.agent.skills_state()
+            plugins_after = self.agent.plugins_state()
             if {(s["name"], s["source"], s.get("category", "")) for s in skills_after} != skills_before:
                 self.send({"type": "skills", "skills": skills_after})
-                self.send({"type": "plugins", "plugins": self.agent.plugins_state()})
+            if [p["name"] for p in plugins_after if p["enabled"]] != plugins_before:
+                self.send({"type": "plugins", "plugins": plugins_after})
+                self.send({"type": "commands", "commands": self._commands_data()})
+            panels_after = self.agent.panels_state()
+            if [p["id"] for p in panels_after] != panels_before:
+                self.send({"type": "panels", "panels": panels_after})
             self.send({"type": "cockpit", **self._cockpit_snapshot()})
             self.send({"type": "turn_done"})
 
@@ -868,7 +882,8 @@ class Connection:
         return out
 
     def _set_plugin_enabled(self, name: str, enabled: bool) -> None:
-        """Toggle a plugin for this session while preserving conversation history."""
+        """Hot-mount or hot-unmount a plugin in place via its reversible handle
+        without rebuilding `AgentLoop` or losing any live session state."""
         if not name or self.busy:
             if self.busy:
                 self.send({"type": "notice", "message": "wait for the current turn before toggling plugins",
@@ -880,38 +895,39 @@ class Connection:
             cur = [p["name"] for p in self.agent.plugins_state() if p["enabled"]]
         else:
             cur = list(cur)
-        if enabled and name not in cur:
-            cur.append(name)
-        elif not enabled and name in cur:
-            cur.remove(name)
+
+        if enabled:
+            ok, msg = self.agent.mount_plugin(name)
+            if not ok:
+                self.send({"type": "notice", "message": msg, "level": "warn"})
+            elif name not in cur:
+                cur.append(name)
+        else:
+            unmounted = self.agent.unmount_plugin(name)
+            for u in unmounted:
+                if u in cur:
+                    cur.remove(u)
+            if len(unmounted) > 1:
+                self.send({
+                    "type": "notice",
+                    "message": f"Disabled {', '.join(unmounted)} (dependent plugins cascaded).",
+                    "level": "info",
+                })
+
         plugins_cfg["enabled"] = cur
-
-        # Snapshot conversation state so toggling a plugin doesn't wipe the chat.
-        prev_messages = list(self.agent.context.messages)
-        prev_todo = self.agent.todo_store
-        prev_telemetry = self.agent.telemetry
-        prev_disabled_tools = set(self.agent._disabled_tools)
-        prev_disabled_skills = set(self.agent._disabled_skills)
-        prev_store = self.store
-
-        self._build()
-        self.agent.context.messages = prev_messages
-        self.agent.todo_store = prev_todo
-        self.agent.telemetry = prev_telemetry
-        self.agent._disabled_tools = prev_disabled_tools
-        self.agent._disabled_skills = prev_disabled_skills
-        if prev_store is not None:
-            self.store = prev_store
-        self.agent.rebuild_system_prompt()
+        self.agent.config.plugins["enabled"] = list(cur)
 
         self.send({"type": "plugins", "plugins": self.agent.plugins_state()})
         self.send({"type": "tools", "tools": self.agent.tools_state()})
         self.send({"type": "skills", "skills": self.agent.skills_state()})
         self.send({"type": "commands", "commands": self._commands_data()})
+        self.send({"type": "panels", "panels": self.agent.panels_state()})
         self.send({"type": "cockpit", **self._cockpit_snapshot()})
 
     def _new_conversation(self) -> None:
         """Fresh agent + new session id in the same workspace, keeping model/mode."""
+        with contextlib.suppress(Exception):
+            self.agent._applied_plugins.dispose_all(self.agent.registry)
         self._build()
         self.send({"type": "cleared"})
         self.send({"type": "profile", **self._profile_data()})
@@ -922,6 +938,7 @@ class Connection:
         self.send({"type": "commands", "commands": self._commands_data()})
         self.send({"type": "todos", "todos": self.agent.todos_state()})
         self.send({"type": "cockpit", **self._cockpit_snapshot()})
+        self.send({"type": "panels", "panels": self.agent.panels_state()})
 
     def _set_workspace(self, path: str) -> None:
         """Point the agent at another project directory: chdir, then rebuild so its
@@ -1336,6 +1353,20 @@ def create_app(
     def api_git_diff(path: str = "") -> dict[str, Any]:
         return _git_file_diff(path)
 
+    @app.get("/api/panels")
+    def api_panels() -> list[dict[str, Any]]:
+        for conn in list(connections):
+            return conn.agent.panels_state()
+        return []
+
+    @app.get("/api/panels/{panel_id}")
+    def api_panel_data(panel_id: str) -> dict[str, Any]:
+        for conn in list(connections):
+            res = conn.agent.render_panel(panel_id)
+            if res is not None:
+                return res
+        return {"id": panel_id, "error": "panel not found"}
+
     @app.websocket("/ws")
     async def ws(websocket: WebSocket) -> None:
         await websocket.accept()
@@ -1349,6 +1380,8 @@ def create_app(
         conn.send({"type": "commands", "commands": conn._commands_data()})
         conn.send({"type": "todos", "todos": conn.agent.todos_state()})
         conn.send({"type": "cockpit", **conn._cockpit_snapshot()})
+        if conn.agent.panels_state():
+            conn.send({"type": "panels", "panels": conn.agent.panels_state()})
         sender_task = asyncio.create_task(conn.sender())
         tasks: set[asyncio.Task] = set()
 
@@ -1385,5 +1418,7 @@ def create_app(
             sender_task.cancel()
             for t in tasks:
                 t.cancel()
+            with contextlib.suppress(Exception):
+                conn.agent._applied_plugins.dispose_all(conn.agent.registry)
 
     return app
