@@ -217,6 +217,7 @@ def test_web_models_api_refresh_and_ws_broadcast(tmp_path, monkeypatch):
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("codelet.web.server.load_env_files", lambda *a, **kw: [])
+    monkeypatch.setattr("codelet.web.server._user_settings_file", lambda: tmp_path / "settings.json")
     monkeypatch.setattr("codelet.agent_loop.build_client", lambda config: _StubClient())
     monkeypatch.setenv("LLM_BASE_URL", "https://zenmux.ai/api/v1")
     monkeypatch.setenv("LLM_API_KEY", "sk-test")
@@ -282,6 +283,7 @@ def test_web_auto_refresh_on_connect_populates_stale_catalog(tmp_path, monkeypat
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("codelet.web.server.load_env_files", lambda *a, **kw: [])
+    monkeypatch.setattr("codelet.web.server._user_settings_file", lambda: tmp_path / "settings.json")
     monkeypatch.setattr("codelet.agent_loop.build_client", lambda config: _StubClient())
     monkeypatch.setenv("LLM_BASE_URL", "https://zenmux.ai/api/v1")
     monkeypatch.setenv("LLM_API_KEY", "sk-test")
