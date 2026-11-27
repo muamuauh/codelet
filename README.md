@@ -7,16 +7,16 @@
 <p><strong>轻量、透明、可扩展的 AI 编码助手框架与本地三栏 Web 工作台</strong></p>
 
 <p>
-  异步并行 Agent Loop · 原生 Cockpit 驾驶舱与 ZenMux 余额 · 四档权限与思考强度调节 · /btw 隔离侧栏问答 · 两层能力集（Plugins + Tools/Skills）· GitHub Skill 热安装
+  异步并行 Agent Loop · 原生 Cockpit 监控驾驶舱 · 四档权限与思考强度调节 · /btw 隔离侧栏问答 · 两层能力集（Plugins + Tools/Skills）· GitHub Skill 热安装
 </p>
 
 <p>
-  <img src="https://img.shields.io/badge/Version-v0.1.0-10b981?style=flat-square" alt="Version" />
-  <img src="https://img.shields.io/badge/Tests-335%20passed-22c55e?style=flat-square" alt="Tests" />
-  <img src="https://img.shields.io/badge/License-MIT-2563eb?style=flat-square" alt="License" />
-  <img src="https://img.shields.io/badge/Python-%3E%3D3.10-0f172a?style=flat-square" alt="Python" />
-  <img src="https://img.shields.io/badge/UI-CLI%20%7C%20Web%20Workbench-0284c7?style=flat-square" alt="UI" />
-  <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-475569?style=flat-square" alt="Platform" />
+  <img src="https://img.shields.io/static/v1?label=Version&message=v0.1.0&color=10b981&style=flat-square" alt="Version" />
+  <img src="https://img.shields.io/static/v1?label=Tests&message=335+passed&color=22c55e&style=flat-square" alt="Tests" />
+  <img src="https://img.shields.io/static/v1?label=License&message=MIT&color=2563eb&style=flat-square" alt="License" />
+  <img src="https://img.shields.io/static/v1?label=Python&message=3.10%2B&color=0f172a&style=flat-square" alt="Python" />
+  <img src="https://img.shields.io/static/v1?label=UI&message=CLI+%7C+Web&color=0284c7&style=flat-square" alt="UI" />
+  <img src="https://img.shields.io/static/v1?label=Platform&message=Windows+%7C+macOS+%7C+Linux&color=475569&style=flat-square" alt="Platform" />
 </p>
 
 <p>
@@ -38,7 +38,7 @@
 
 ---
 
-> **设计理念**：核心代码精简透明（≤ ~3000 行），每一处工程取舍都有明确动机与文档说明；通过极小的 `AgentSink` 协议将核心 `AgentLoop` 与交互界面解耦，一套引擎同时驱动 **Rich 终端 REPL** 与 **零构建链原生三栏 Web 工作台**；默认兼容 Anthropic 原生与任意 OpenAI 协议中转站（DeepSeek / ZenMux / OpenRouter / Ollama 等）。
+> **设计理念**：核心代码精简透明（≤ ~3000 行），每一处工程取舍都有明确动机与文档说明；通过极小的 `AgentSink` 协议将核心 `AgentLoop` 与交互界面解耦，一套引擎同时驱动 **Rich 终端 REPL** 与 **零构建链原生三栏 Web 工作台**；默认兼容 Anthropic 原生与任意 OpenAI 协议服务端点（DeepSeek / OpenRouter / Ollama / vLLM 等）。
 
 ## 界面预览
 
@@ -53,10 +53,10 @@
 | 模块 | 核心能力 |
 | :--- | :--- |
 | **异步并行 Agent Loop** | 原生 `asyncio` 驱动，单轮多 `tool_use` 经 `asyncio.gather` 并发执行并严格按原始顺序回填，单个工具异常自动隔离不拖垮整轮；支持实时 Token / 推理链（`reasoning_delta` / `thinking_delta`）流式输出与生成中随时 **Stop** 中断。 |
-| **原生 Cockpit 驾驶舱** | 内置 `cockpit` 插件（默认启用）：SVG 上下文环形仪表盘 + 5 段悬浮构成明细（system / tools / assistant / user / free）+ 一键 `/compact`；缓存命中率与累计消耗；TTFT / 均值 / P95 延迟与 `tok/s` 近 24 轮趋势图；**ZenMux PAYG 实时余额**（配可选 `ZENMUX_MANAGEMENT_API_KEY`，未配置自动降级为本地跨会话今日 / 7 日消费与模型分布）。 |
-| **三栏可拖拽 Web 工作台** | 纯原生 HTML/CSS/JS（无前端构建链，仅监听 `127.0.0.1`），左右侧栏支持鼠标拖拉调宽（自动持久化、双击复位）；顶栏上下文环与余额胶囊、`Ctrl+K` 全局命令面板、明暗主题切换、图片粘贴/拖拽多模态、工作区盘符级目录切换、Git 变更与彩色 Diff 查看器。 |
+| **原生 Cockpit 驾驶舱** | 内置 `cockpit` 插件（默认启用）：SVG 上下文环形仪表盘 + 5 段悬浮构成明细（system / tools / assistant / user / free）+ 一键 `/compact`；缓存命中率与累计消耗；TTFT / 均值 / P95 延迟与 `tok/s` 近 24 轮趋势图；跨会话持久化本地今日 / 7 日消费统计与模型分布（支持可选接入服务端余额接口）。 |
+| **三栏可拖拽 Web 工作台** | 纯原生 HTML/CSS/JS（无前端构建链，仅监听 `127.0.0.1`），左右侧栏支持鼠标拖拉调宽（自动持久化、双击复位）；顶栏上下文进度环、`Ctrl+K` 全局命令面板、明暗主题切换、图片粘贴/拖拽多模态、工作区盘符级目录切换、Git 变更与彩色 Diff 查看器。 |
 | **`/btw` 隔离侧栏问答** | 独立上下文旁路提问面板（Web 右侧 `Side /btw` Tab + CLI `/btw`），可附带主对话只读快照但**绝不污染主上下文**，即使主回合正在运行中也可以并发提问。 |
-| **动态模型目录与多 Provider** | 自动从 OpenAI 兼容端点（如 ZenMux `GET /api/v1/models`）拉取最新模型目录并本地 TTL 缓存（默认 24h），带搜索、厂商分组、上下文窗口 / 价格 / Vision / Reasoning 能力标签与一键刷新；定价与上下文上限自动同步到遥测与压缩预算。 |
+| **动态模型目录与多 Provider** | 自动从 OpenAI 兼容端点（`GET /v1/models`）拉取最新模型目录并本地 TTL 缓存（默认 24h），带搜索、厂商分组、上下文窗口 / 价格 / Vision / Reasoning 能力标签与一键刷新；定价与上下文上限自动同步到遥测与压缩预算。 |
 | **四层上下文压缩与 SubAgent** | L0 超长输出落盘 → L1 零 LLM 清理旧工具结果 → L2 七节结构化滚动摘要（以服务商 `input_tokens` 为锚，保留 todo 列表）→ L3 保持 `tool_use/tool_result` 配对的硬上限；支持 `task` 并行子代理（深度上限 2、隔离上下文）。 |
 | **GitHub Skill 安装与自建** | 同时支持扁平 `*.md` 与目录包 `<name>/SKILL.md`（含 `scripts/`、`references/`）；贴入 GitHub 链接即可通过 `install_skill` / `/install` 拉取、自动补全 frontmatter、审计脚本安全并**热重载**；内置 **`skill-creator`** 技能，按自然语言描述即可创建并立即生效新 Skill。 |
 
@@ -78,10 +78,10 @@
 | 档位 | 说明 | 底层协议映射 |
 | :--- | :--- | :--- |
 | **`auto`**（默认） | 跟随当前模型默认思考策略 | 不附加参数，保持上游默认 |
-| **`off`** | 关闭思考链，最低延迟与成本 | OpenAI/ZenMux 传 `reasoning_effort="none"`；Anthropic 不启用 `thinking` |
-| **`low`** | 轻度思考，适合常规小改与问答 | OpenAI/ZenMux `low`；Anthropic `budget_tokens=2048` |
-| **`medium`** | 中度思考，平衡推理质量与速度 | OpenAI/ZenMux `medium`；Anthropic `budget_tokens=6144` |
-| **`high`** | 深度思考，适合架构设计与疑难排查 | OpenAI/ZenMux `high`；Anthropic `budget_tokens=12288` |
+| **`off`** | 关闭思考链，最低延迟与成本 | OpenAI 兼容端点传 `reasoning_effort="none"`；Anthropic 不启用 `thinking` |
+| **`low`** | 轻度思考，适合常规小改与问答 | OpenAI 兼容端点 `low`；Anthropic `budget_tokens=2048` |
+| **`medium`** | 中度思考，平衡推理质量与速度 | OpenAI 兼容端点 `medium`；Anthropic `budget_tokens=6144` |
+| **`high`** | 深度思考，适合架构设计与疑难排查 | OpenAI 兼容端点 `high`；Anthropic `budget_tokens=12288` |
 
 > 对不支持思考强度参数的普通模型，客户端会自动捕获上游拒绝并静默降级重试，不会导致回合中断。
 
@@ -98,7 +98,7 @@ codelet 采用清晰的两层能力架构，左侧栏直观分区、全部支持
 
 | 插件 | 默认 | 捆绑工具 / 技能 / 命令 | 核心能力 |
 | :--- | :---: | :--- | :--- |
-| **`cockpit`** | ✅ 启用 | `cockpit_status` · `✦ session-diagnostics` · `/cockpit` | 上下文 5 段监控、缓存命中、速度/延迟曲线、跨会话消费与 ZenMux PAYG 余额 |
+| **`cockpit`** | ✅ 启用 | `cockpit_status` · `✦ session-diagnostics` · `/cockpit` | 上下文 5 段监控、缓存命中、速度/延迟曲线与跨会话消费统计 |
 | **`rag`** | 可选 | `search_docs` · `✦ workspace-research` · `/rag` | 本地纯 Python BM25 全文检索（无外部 embedding API 依赖） |
 | **`memory`** | 可选 | `memory` · `✦ memory-hygiene` · `/memory` | 跨会话有类型 Markdown 记忆（项目级 / 用户级），按 key 覆写、拒存密钥 |
 | **`evolve`** | 可选 | `create_tool` · `/evolve` | 自进化：Agent 缺工具时自行编写 Python 插件并热激活到运行中会话 |
@@ -132,12 +132,11 @@ cp .env.example .env
 ```
 
 ```ini
-# .env — 兼容任意 OpenAI 协议端点（ZenMux / DeepSeek / OpenRouter / Ollama 等）
-LLM_BASE_URL=https://zenmux.ai/api/v1
+# .env — 兼容任意 OpenAI 协议端点（DeepSeek / OpenRouter / Ollama / 自建网关等）
+LLM_BASE_URL=https://api.deepseek.com/v1
 LLM_API_KEY=sk-xxx
-LLM_MODEL=qwen/qwen3.8-max
-# LLM_PROVIDER=openai               # 默认 openai；使用 Anthropic 原生时设 anthropic
-# ZENMUX_MANAGEMENT_API_KEY=sk-mgmt # 可选：用于在 Cockpit 显示 ZenMux PAYG 实时余额
+LLM_MODEL=deepseek-chat
+# LLM_PROVIDER=openai   # 默认 openai；使用 Anthropic 原生时设 anthropic
 ```
 
 > Shell 导出的环境变量优先级高于 `.env`；也可在 [`.codelet/settings.json`](./.codelet/settings.json) 中配置多套命名 `profiles` 并通过 `--profile <name>` 切换。解析优先级：`CLI 参数 > --profile > settings.json > .env (LLM_*) > anthropic`。
@@ -169,7 +168,7 @@ python -m codelet --resume <session-id>
 | `/btw <question>` | 在隔离侧栏发起旁路提问（不污染主上下文） |
 | `/compact [focus]` · `/clear` | 手动压缩上下文（可指定保留重点）/ 清空新开会话 |
 | `/install <github-url> [--global] [--plugin <pack>]` | 从 GitHub 拉取并安全审计、热安装 Skill |
-| `/cockpit [refresh]` · `/cost` · `/usage` | 打开 Cockpit 监控 / 刷新余额 / 查看消费统计 |
+| `/cockpit [refresh]` · `/cost` · `/usage` | 打开 Cockpit 监控面板 / 查看会话与 7 日消费统计 |
 | `/diff` · `/todos` · `/export` | 查看 Git 变更 / 任务清单 / 导出对话为 Markdown |
 | `/tools` · `/skills` · `/commands` · `/sessions` · `/resume <id>` | 查看能力集与会话管理 |
 
@@ -254,7 +253,7 @@ python -m evals.runner
 python -m evals.swebench.run_swebench --gold --limit 5
 ```
 
-- **全量回归测试**：`335 passed`（覆盖核心 Loop、权限、压缩、遥测、模型目录、Cockpit/ZenMux 余额、`/btw`、思考强度、两层插件热插拔、GitHub Skill 安装器与 WebSocket 端到端流程）。
+- **全量回归测试**：`335 passed`（覆盖核心 Loop、权限、压缩、遥测、模型目录、Cockpit、`/btw`、思考强度、两层插件热插拔、GitHub Skill 安装器与 WebSocket 端到端流程）。
 - **专项评测成果**：上下文结构化压缩保留率 `59/60`（摘要输入省约 80%）；跨会话记忆纠偏遵守率 `3/20 → 19/20`；意图路由误改率 `1/16 → 0/16`；SWE-bench Lite 实测详见 [`evals/swebench/README.md`](./evals/swebench/README.md)。
 
 ---

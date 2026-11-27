@@ -7,16 +7,16 @@
 <p><strong>Lightweight, Transparent, Extensible AI Coding Agent Framework &amp; Local 3-Pane Web Workbench</strong></p>
 
 <p>
-  Async Parallel Agent Loop · Native Cockpit &amp; ZenMux Balance · 4 Modes &amp; 5 Thinking Efforts · Isolated /btw Side Q&amp;A · 2-Layer Capabilities · GitHub Skill Hot-Install
+  Async Parallel Agent Loop · Native Cockpit Telemetry · 4 Modes &amp; 5 Thinking Efforts · Isolated /btw Side Q&amp;A · 2-Layer Capabilities · GitHub Skill Hot-Install
 </p>
 
 <p>
-  <img src="https://img.shields.io/badge/Version-v0.1.0-10b981?style=flat-square" alt="Version" />
-  <img src="https://img.shields.io/badge/Tests-335%20passed-22c55e?style=flat-square" alt="Tests" />
-  <img src="https://img.shields.io/badge/License-MIT-2563eb?style=flat-square" alt="License" />
-  <img src="https://img.shields.io/badge/Python-%3E%3D3.10-0f172a?style=flat-square" alt="Python" />
-  <img src="https://img.shields.io/badge/UI-CLI%20%7C%20Web%20Workbench-0284c7?style=flat-square" alt="UI" />
-  <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-475569?style=flat-square" alt="Platform" />
+  <img src="https://img.shields.io/static/v1?label=Version&message=v0.1.0&color=10b981&style=flat-square" alt="Version" />
+  <img src="https://img.shields.io/static/v1?label=Tests&message=335+passed&color=22c55e&style=flat-square" alt="Tests" />
+  <img src="https://img.shields.io/static/v1?label=License&message=MIT&color=2563eb&style=flat-square" alt="License" />
+  <img src="https://img.shields.io/static/v1?label=Python&message=3.10%2B&color=0f172a&style=flat-square" alt="Python" />
+  <img src="https://img.shields.io/static/v1?label=UI&message=CLI+%7C+Web&color=0284c7&style=flat-square" alt="UI" />
+  <img src="https://img.shields.io/static/v1?label=Platform&message=Windows+%7C+macOS+%7C+Linux&color=475569&style=flat-square" alt="Platform" />
 </p>
 
 <p>
@@ -37,7 +37,7 @@
 
 ---
 
-> **Design Philosophy**: Keep the core agent loop compact and readable (~3,000 LOC) with every design trade-off documented. A minimal `AgentSink` protocol decouples `AgentLoop` from UI rendering so one engine drives both a **Rich CLI REPL** and a **zero-build 3-pane local Web Workbench**. Works natively with Anthropic and any OpenAI-compatible endpoint (ZenMux, DeepSeek, OpenRouter, Ollama, vLLM, etc.).
+> **Design Philosophy**: Keep the core agent loop compact and readable (~3,000 LOC) with every design trade-off documented. A minimal `AgentSink` protocol decouples `AgentLoop` from UI rendering so one engine drives both a **Rich CLI REPL** and a **zero-build 3-pane local Web Workbench**. Works natively with Anthropic and any OpenAI-compatible endpoint (DeepSeek, OpenRouter, Ollama, vLLM, etc.).
 
 ## Preview
 
@@ -52,10 +52,10 @@
 | Module | Capabilities |
 | :--- | :--- |
 | **Async Parallel Agent Loop** | Native `asyncio` loop dispatching multiple tool calls concurrently via `asyncio.gather` while preserving exact `tool_use` order and isolating per-tool errors; streams text & reasoning deltas (`reasoning_delta` / `thinking_delta`) with instant **Stop** cancellation. |
-| **Native Cockpit Plugin** | Default-enabled `cockpit` plugin featuring a live SVG context ring + 5-segment hover breakdown (`system / tools / assistant / user / free`) + one-click `/compact`, prompt cache hit rate, TTFT/Avg/P95 latency & `tok/s` 24-turn trend charts, and **ZenMux PAYG real-time balance** (via optional `ZENMUX_MANAGEMENT_API_KEY`, gracefully falling back to local today / 7-day spend charts). |
-| **Resizable 3-Pane Web Workbench** | Pure HTML/CSS/JS (no build chain, bound to `127.0.0.1`) with draggable left/right panes (persisted in `localStorage`, double-click to reset), topbar context & balance pills, `Ctrl+K` global command palette, light/dark themes, image paste/drag-drop multimodal input, drive-root workspace switcher, and Git Changes + colored diff viewer. |
+| **Native Cockpit Plugin** | Default-enabled `cockpit` plugin featuring a live SVG context ring + 5-segment hover breakdown (`system / tools / assistant / user / free`) + one-click `/compact`, prompt cache hit rate, TTFT/Avg/P95 latency & `tok/s` 24-turn trend charts, and cross-session today / 7-day spend & model distribution charts (with optional provider balance integration). |
+| **Resizable 3-Pane Web Workbench** | Pure HTML/CSS/JS (no build chain, bound to `127.0.0.1`) with draggable left/right panes (persisted in `localStorage`, double-click to reset), topbar context gauge pill, `Ctrl+K` global command palette, light/dark themes, image paste/drag-drop multimodal input, drive-root workspace switcher, and Git Changes + colored diff viewer. |
 | **Isolated `/btw` Side Q&A** | Dedicated side-panel Q&A (`Side /btw` tab & CLI `/btw`) with optional read-only main-context snapshot — **never mutates main conversation messages** and runs concurrently even while a main turn is busy. |
-| **Dynamic Model Catalog** | Periodically fetches models from OpenAI-compatible endpoints (e.g. ZenMux `GET /api/v1/models`) with local TTL disk cache, searchable picker, vendor tabs, context length / pricing / vision / reasoning badges, and automatic pricing + context-window sync. |
+| **Dynamic Model Catalog** | Periodically fetches models from OpenAI-compatible endpoints (`GET /v1/models`) with local TTL disk cache, searchable picker, vendor tabs, context length / pricing / vision / reasoning badges, and automatic pricing + context-window sync. |
 | **4-Layer Compaction & SubAgents** | L0 large-output spill → L1 zero-LLM old tool output clearing → L2 7-section structured rolling summary (usage-anchored, preserving todos) → L3 pair-safe hard ceiling; parallel isolated `task` subagents (max depth 2). |
 | **GitHub Skill Hot-Install & Creator** | Supports both flat `*.md` and `<name>/SKILL.md` bundles (`scripts/`, `references/`); paste any GitHub URL or run `/install <url>` for frontmatter normalization, script security audit, and instant hot-reload; ships with built-in **`skill-creator`** to author new skills from natural language. |
 
@@ -75,8 +75,8 @@
 ### 5 Thinking Effort Levels (`--effort` / `/effort` / `Think` Pill / Cockpit)
 
 - **`auto`** *(default)* — follows the upstream model's default reasoning behavior
-- **`off`** — disables reasoning (`reasoning_effort="none"` on OpenAI/ZenMux; omits Anthropic `thinking`)
-- **`low` / `medium` / `high`** — maps to `reasoning_effort` on OpenAI/ZenMux and `thinking.budget_tokens` (`2048 / 6144 / 12288`) on Anthropic, with automatic fallback retry for non-reasoning models.
+- **`off`** — disables reasoning (`reasoning_effort="none"` on OpenAI-compatible endpoints; omits Anthropic `thinking`)
+- **`low` / `medium` / `high`** — maps to `reasoning_effort` on OpenAI-compatible endpoints and `thinking.budget_tokens` (`2048 / 6144 / 12288`) on Anthropic, with automatic fallback retry for non-reasoning models.
 
 ---
 
@@ -97,7 +97,6 @@ pip install -e ".[dev,web]"
 
 cp .env.example .env
 # Edit .env: set LLM_BASE_URL, LLM_API_KEY, LLM_MODEL
-# Optional: ZENMUX_MANAGEMENT_API_KEY for live PAYG credit balance in Cockpit
 ```
 
 ```bash
