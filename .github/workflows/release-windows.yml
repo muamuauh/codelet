@@ -1,0 +1,104 @@
+name: Release Windows Desktop
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag name (e.g. v0.1.0)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install Python dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,web]" pyinstaller pillow
+
+      - name: Run Python test suite
+        shell: pwsh
+        env:
+          PYTHONUTF8: "1"
+        run: pytest -q
+
+      - name: Generate icons and build PyInstaller backend sidecar
+        shell: pwsh
+        run: |
+          python desktop/scripts/gen-icons.py
+          python -m PyInstaller --distpath desktop/backend-dist --workpath desktop/build/pyi -y desktop/scripts/codelet-backend.spec
+
+      - name: Install Electron dependencies and check JS syntax
+        shell: pwsh
+        run: |
+          npm --prefix desktop ci
+          node --check codelet/web/static/app.js
+          node --check desktop/main.js
+          node --check desktop/preload.js
+          node --check desktop/backend.js
+          node --check desktop/secrets.js
+          node --check desktop/tray.js
+
+      - name: Package Windows Desktop executables
+        shell: pwsh
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: |
+          npm --prefix desktop run dist
+          $ver = (Get-Content desktop/package.json -Raw | ConvertFrom-Json).version
+          Compress-Archive -Path "desktop/dist/win-unpacked/*" -DestinationPath "desktop/dist/codelet-$ver-win-x64-unpacked.zip" -Force
+          Get-ChildItem desktop/dist/*.exe, desktop/dist/*.zip
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: codelet-desktop-windows
+          path: |
+            desktop/dist/codelet-*-portable.exe
+            desktop/dist/codelet-*-win-x64-unpacked.zip
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.tag != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag != '' && inputs.tag || github.ref_name }}
+          name: "codelet ${{ inputs.tag != '' && inputs.tag || github.ref_name }} (Windows Desktop)"
+          generate_release_notes: true
+          body: |
+            ## codelet Desktop — Windows Release
+
+            ### Highlights
+            - **Standalone Electron + FastAPI Desktop App**: Zero Python setup required; runs locally with system tray support (minimize to tray on close, right-click to quit cleanly).
+            - **Windows DPAPI Encrypted API Key Vault**: Configure OpenAI-compatible relays or Anthropic directly in the in-app Settings modal; secrets are encrypted with Windows DPAPI (`safeStorage`) and never written in plaintext.
+            - **Per-Profile Model Directory & AI Relay Discovery**: Map API model IDs to custom display names, drag-reorder, pull from `/models`, or let your configured model read relay docs to discover available models.
+            - **Unified AGY-Style Workbench**: Single-card composer with inline model, thinking effort, `/btw` side chat, and permission mode controls; workspace-grouped Conversations; per-workspace persistence for Plugins, Tools, Skills & sidebar fold states; Cockpit telemetry & spend dashboard.
+
+            ### Downloads
+            - **`codelet-*-portable.exe`**: Single-file portable executable — download and run directly.
+            - **`codelet-*-win-x64-unpacked.zip`**: Unpacked directory build — extract and run `codelet.exe` for the fastest cold start.
+          files: |
+            desktop/dist/codelet-*-portable.exe
+            desktop/dist/codelet-*-win-x64-unpacked.zip
