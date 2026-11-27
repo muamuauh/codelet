@@ -79,6 +79,7 @@ jobs:
           name: codelet-desktop-windows
           path: |
             desktop/dist/codelet-Setup-*.exe
+            desktop/dist/codelet-Setup-*.exe.blockmap
             desktop/dist/codelet-*-portable.exe
             desktop/dist/codelet-*-win-x64-unpacked.zip
             desktop/dist/latest.yml
@@ -105,6 +106,7 @@ jobs:
             - **`codelet-*-win-x64-unpacked.zip`**: Unpacked directory build — extract and run `codelet.exe` for instant startup.
           files: |
             desktop/dist/codelet-Setup-*.exe
+            desktop/dist/codelet-Setup-*.exe.blockmap
             desktop/dist/codelet-*-portable.exe
             desktop/dist/codelet-*-win-x64-unpacked.zip
             desktop/dist/latest.yml

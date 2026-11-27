@@ -17,8 +17,24 @@ def test_decode_output_reads_utf8_and_the_windows_console_codepage():
     assert decode_output("中文 ok".encode("utf-8")) == "中文 ok"
     if os.name != "nt":
         pytest.skip("the OEM code page fallback is Windows-only")
-    msg = "'rg' 不是内部或外部命令"
-    assert decode_output(msg.encode("oem")) == msg
+    # Pick a sample representable in this host's Windows OEM code page (e.g.
+    # cp936 on Chinese Windows, cp437/cp850 on English CI runners) whose OEM
+    # bytes are invalid UTF-8 so the OEM fallback branch is genuinely exercised.
+    sample: tuple[str, bytes] | None = None
+    for cand in ("'rg' 不是内部或外部命令", "café", "naïve"):
+        try:
+            raw = cand.encode("oem")
+        except UnicodeEncodeError:
+            continue
+        try:
+            raw.decode("utf-8")
+        except UnicodeDecodeError:
+            sample = (cand, raw)
+            break
+    if sample is None:
+        pytest.skip("host OEM code page is UTF-8 compatible")
+    msg, raw = sample
+    assert decode_output(raw) == msg
 
 
 def test_codelet_shell_overrides_the_choice(monkeypatch):
