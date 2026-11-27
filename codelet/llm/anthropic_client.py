@@ -127,12 +127,17 @@ class AnthropicClient(LLMClient):
         usage: dict[str, Any] = {}
         if getattr(response, "usage", None):
             u = response.usage
-            usage = {
-                "input_tokens": int(getattr(u, "input_tokens", 0) or 0),
-                "output_tokens": int(getattr(u, "output_tokens", 0) or 0),
-            }
+            ipt = int(getattr(u, "input_tokens", 0) or 0)
+            out_tok = int(getattr(u, "output_tokens", 0) or 0)
             cache_read = int(getattr(u, "cache_read_input_tokens", 0) or 0)
             cache_write = int(getattr(u, "cache_creation_input_tokens", 0) or 0)
+            usage = {
+                "input_tokens": ipt,
+                "output_tokens": out_tok,
+                # Anthropic's `input_tokens` excludes cache read/creation tokens.
+                "cache_exclusive": True,
+                "total_input_tokens": ipt + cache_read + cache_write,
+            }
             if cache_read:
                 usage["cache_read_tokens"] = cache_read
             if cache_write:

@@ -143,13 +143,16 @@ class ConversationContext:
 
     # ---------- token budget ----------
 
-    def note_usage(self, usage: dict[str, int]) -> None:
-        """Anchor the estimate on the provider's count for the call that just
-        returned. Called before that call's reply is appended, so it covers
-        exactly the messages that were sent."""
-        n = int(usage.get("input_tokens") or 0)
-        if n > 0:
-            self._anchor = (n, len(self.messages))
+    def note_usage(self, usage: dict[str, Any]) -> None:
+        """Anchor the estimate on the provider's total input token count (including
+        cached prefix tokens for Anthropic/Claude-style exclusive usage payloads).
+        Called before that call's reply is appended, so it covers exactly the
+        messages that were sent."""
+        from .telemetry import resolve_input_tokens
+
+        total_in, _, _, _ = resolve_input_tokens(usage)
+        if total_in > 0:
+            self._anchor = (total_in, len(self.messages))
 
     def estimate_tokens(self) -> int:
         """Prompt size the next call will have: the last reported

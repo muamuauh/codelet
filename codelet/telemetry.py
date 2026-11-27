@@ -32,6 +32,42 @@ DEFAULT_PRICING: dict[str, dict[str, float]] = {
 }
 
 
+def resolve_input_tokens(usage: dict[str, Any] | None) -> tuple[int, int, int, int]:
+    """Normalize provider-specific input/cache token usage.
+
+    Returns ``(total_input, uncached_input, cache_read, cache_write)``.
+
+    Two reporting conventions exist in the wild:
+    - **Anthropic / Claude-passthrough relays (exclusive)**: ``input_tokens``
+      counts only *uncached* new tokens; ``cache_read_tokens`` and
+      ``cache_write_tokens`` are reported separately and must be added to get
+      the true prompt/context size.
+    - **OpenAI-compatible (inclusive)**: ``prompt_tokens`` (mapped to
+      ``input_tokens``) already includes ``cached_tokens``.
+
+    When ``cache_exclusive`` is explicitly set (by ``AnthropicClient`` or
+    detected by ``OpenAICompatClient``), or when ``input_tokens < cache_read +
+    cache_write`` (mathematically impossible under inclusive accounting), we
+    treat the payload as exclusive.
+    """
+    if not usage:
+        return 0, 0, 0, 0
+    ipt = max(0, int(usage.get("input_tokens", 0) or 0))
+    cr = max(0, int(usage.get("cache_read_tokens", 0) or 0))
+    cw = max(0, int(usage.get("cache_write_tokens", 0) or 0))
+    explicit_total = usage.get("total_input_tokens")
+
+    exclusive = bool(usage.get("cache_exclusive")) or ((cr + cw) > 0 and ipt < (cr + cw))
+    if exclusive:
+        total_in = int(explicit_total) if explicit_total is not None else (ipt + cr + cw)
+        total_in = max(total_in, ipt + cr + cw)
+        uncached_in = ipt
+    else:
+        total_in = int(explicit_total) if explicit_total is not None else ipt
+        uncached_in = max(0, total_in - cr - cw)
+    return total_in, uncached_in, cr, cw
+
+
 @dataclass
 class TurnUsage:
     input_tokens: int = 0
@@ -40,10 +76,17 @@ class TurnUsage:
     model: str = ""
     cache_read_tokens: int = 0
     cache_write_tokens: int = 0
+    uncached_input_tokens: int | None = None
     latency_ms: float = 0.0
     ttft_ms: float | None = None
     context_tokens: int = 0
     ts: float = 0.0
+
+    @property
+    def effective_uncached_input(self) -> int:
+        if self.uncached_input_tokens is not None:
+            return self.uncached_input_tokens
+        return max(0, self.input_tokens - self.cache_read_tokens - self.cache_write_tokens)
 
     @property
     def speed_tps(self) -> float | None:
@@ -89,29 +132,37 @@ class Telemetry:
     ) -> TurnUsage:
         """Append one LLM-call usage record. Returns the row for callers that
         want to log it inline."""
-        ipt = int(usage.get("input_tokens", 0) or 0)
+        total_in, uncached_in, cache_read, cache_write = resolve_input_tokens(usage)
         out = int(usage.get("output_tokens", 0) or 0)
-        cache_read = int(usage.get("cache_read_tokens", 0) or 0)
-        cache_write = int(usage.get("cache_write_tokens", 0) or 0)
         latency_ms = float(usage.get("latency_ms", 0.0) or 0.0)
         ttft_raw = usage.get("ttft_ms")
         ttft_ms = float(ttft_raw) if ttft_raw is not None else None
         cost: float | None
         prices = self.pricing.get(model)
         if prices:
-            cost = (ipt / 1_000_000) * prices["input"] + (out / 1_000_000) * prices["output"]
+            in_price = prices["input"]
+            out_price = prices["output"]
+            cr_price = prices.get("cache_read", in_price * 0.1)
+            cw_price = prices.get("cache_write", in_price * 1.25)
+            cost = (
+                (uncached_in / 1_000_000) * in_price
+                + (cache_read / 1_000_000) * cr_price
+                + (cache_write / 1_000_000) * cw_price
+                + (out / 1_000_000) * out_price
+            )
         else:
             cost = None
         row = TurnUsage(
-            input_tokens=ipt,
+            input_tokens=total_in,
             output_tokens=out,
             cost_usd=cost,
             model=model,
             cache_read_tokens=cache_read,
             cache_write_tokens=cache_write,
+            uncached_input_tokens=uncached_in,
             latency_ms=latency_ms,
             ttft_ms=ttft_ms,
-            context_tokens=context_tokens or ipt,
+            context_tokens=context_tokens or total_in,
             ts=time.time(),
         )
         self.turns.append(row)
@@ -124,28 +175,26 @@ class Telemetry:
 
     def cache_stats(self) -> dict[str, Any]:
         """Latest and cumulative prompt cache hit rate."""
-        def _rate(ipt: int, cr: int) -> float:
-            if cr <= 0:
+        def _rate(total_in: int, cr: int) -> float:
+            if cr <= 0 or total_in <= 0:
                 return 0.0
-            # OpenAI includes cached_tokens inside prompt_tokens; Anthropic reports
-            # cache_read separately. Using max(ipt, cr) stays bounded in [0, 1].
-            denom = max(ipt, cr)
-            return round(min(1.0, cr / denom) * 100.0, 1) if denom > 0 else 0.0
+            return round(min(1.0, cr / total_in) * 100.0, 1)
 
         tot_in = sum(t.input_tokens for t in self.turns)
+        tot_uncached = sum(t.effective_uncached_input for t in self.turns)
         tot_cache = sum(t.cache_read_tokens for t in self.turns)
         tot_out = sum(t.output_tokens for t in self.turns)
         latest = self.turns[-1] if self.turns else None
         latest_in = latest.input_tokens if latest else 0
         latest_cache = latest.cache_read_tokens if latest else 0
-        latest_uncached = max(0, latest_in - latest_cache)
+        latest_uncached = latest.effective_uncached_input if latest else 0
         return {
             "latest_hit_pct": _rate(latest_in, latest_cache),
             "cumulative_hit_pct": _rate(tot_in, tot_cache),
             "latest_uncached_in": latest_uncached,
             "latest_cache_read": latest_cache,
             "latest_out": latest.output_tokens if latest else 0,
-            "total_uncached_in": max(0, tot_in - tot_cache),
+            "total_uncached_in": tot_uncached,
             "total_cache_read": tot_cache,
             "total_out": tot_out,
             "total_calls": len(self.turns),

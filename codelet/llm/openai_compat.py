@@ -200,23 +200,38 @@ class OpenAICompatClient(LLMClient):
 
     @staticmethod
     def _extract_usage(usage_obj: Any) -> dict[str, Any]:
+        ipt = int(getattr(usage_obj, "prompt_tokens", 0) or 0)
+        out_tok = int(getattr(usage_obj, "completion_tokens", 0) or 0)
         usage: dict[str, Any] = {
-            "input_tokens": int(getattr(usage_obj, "prompt_tokens", 0) or 0),
-            "output_tokens": int(getattr(usage_obj, "completion_tokens", 0) or 0),
+            "input_tokens": ipt,
+            "output_tokens": out_tok,
         }
         details = getattr(usage_obj, "prompt_tokens_details", None)
-        cached = 0
+        details_cached = 0
         if details is not None:
-            cached = int(getattr(details, "cached_tokens", 0) or (
+            details_cached = int(getattr(details, "cached_tokens", 0) or (
                 details.get("cached_tokens", 0) if isinstance(details, dict) else 0
             ) or 0)
-        if not cached:
-            cached = int(getattr(usage_obj, "cache_read_input_tokens", 0) or 0)
+        anthropic_cached = int(getattr(usage_obj, "cache_read_input_tokens", 0) or 0)
+        cached = details_cached or anthropic_cached
         if cached:
             usage["cache_read_tokens"] = cached
         cache_write = int(getattr(usage_obj, "cache_creation_input_tokens", 0) or 0)
         if cache_write:
             usage["cache_write_tokens"] = cache_write
+
+        # Standard OpenAI `prompt_tokens` includes `cached_tokens`, whereas
+        # Claude-passthrough relays often report uncached-only `prompt_tokens`
+        # alongside Anthropic cache fields (or `prompt_tokens < cached + cache_write`).
+        if (cached + cache_write) > 0:
+            is_exclusive = (ipt < cached + cache_write) or (
+                details_cached == 0 and (anthropic_cached > 0 or cache_write > 0)
+            )
+            if is_exclusive:
+                usage["cache_exclusive"] = True
+                usage["total_input_tokens"] = ipt + cached + cache_write
+            else:
+                usage["total_input_tokens"] = ipt
         return usage
 
     @staticmethod

@@ -441,6 +441,7 @@ def test_web_cockpit_btw_slash_and_git_endpoints(monkeypatch, tmp_path: Path):
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("codelet.web.server.load_env_files", lambda *a, **kw: [])
+    monkeypatch.setattr("codelet.web.server._workspace_states_file", lambda: tmp_path / "workspace_states.json")
     monkeypatch.setattr("codelet.plugins.builtin.cockpit.default_usage_path", lambda: tmp_path / "usage.jsonl")
     monkeypatch.delenv("ZENMUX_MANAGEMENT_API_KEY", raising=False)
     monkeypatch.delenv("LLM_MANAGEMENT_API_KEY", raising=False)
@@ -545,6 +546,7 @@ def test_web_cancel_in_flight_turn(monkeypatch, tmp_path: Path):
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("codelet.web.server.load_env_files", lambda *a, **kw: [])
+    monkeypatch.setattr("codelet.web.server._workspace_states_file", lambda: tmp_path / "workspace_states.json")
     monkeypatch.setattr("codelet.plugins.builtin.cockpit.default_usage_path", lambda: tmp_path / "usage.jsonl")
 
     target = str(tmp_path / "should_not_exist.txt")
@@ -655,6 +657,7 @@ def test_web_plugin_toggle_hot_plugs_bundled_skills(monkeypatch, tmp_path: Path)
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("codelet.web.server.load_env_files", lambda *a, **kw: [])
+    monkeypatch.setattr("codelet.web.server._workspace_states_file", lambda: tmp_path / "workspace_states.json")
     monkeypatch.setattr("codelet.plugins.builtin.cockpit.default_usage_path", lambda: tmp_path / "u.jsonl")
     monkeypatch.setattr("codelet.agent_loop.build_client", lambda cfg: _BtwStubClient())
 
@@ -678,5 +681,91 @@ def test_web_plugin_toggle_hot_plugs_bundled_skills(monkeypatch, tmp_path: Path)
         _recv_until(ws, "tools", limit=10)
         s_off = _recv_until(ws, "skills", limit=10)["skills"]
         assert not any(s["name"] == "memory-hygiene" for s in s_off)
+
+
+# ---------------------------------------------------------------------------
+# Prompt cache normalization: Anthropic exclusive vs OpenAI inclusive vs relays
+# ---------------------------------------------------------------------------
+
+
+def test_anthropic_and_relay_exclusive_cache_usage_anchors_context_and_telemetry():
+    from types import SimpleNamespace
+    from codelet.llm.anthropic_client import AnthropicClient
+    from codelet.telemetry import resolve_input_tokens
+
+    # 1. Native Anthropic response: input_tokens (26) is uncached-only;
+    #    cache_read (100_000) + cache_creation (1_500) are separate.
+    anth_raw = SimpleNamespace(
+        content=[SimpleNamespace(type="text", text="done")],
+        stop_reason="end_turn",
+        usage=SimpleNamespace(
+            input_tokens=26,
+            output_tokens=200,
+            cache_read_input_tokens=100_000,
+            cache_creation_input_tokens=1_500,
+        ),
+    )
+    anth_resp = AnthropicClient._assemble(anth_raw)
+    assert anth_resp.usage["cache_exclusive"] is True
+    assert anth_resp.usage["total_input_tokens"] == 101_526
+    assert resolve_input_tokens(anth_resp.usage) == (101_526, 26, 100_000, 1_500)
+
+    # Context anchor MUST use total input (101_526), NOT raw uncached (26)
+    ctx = ConversationContext(Config(context_window=1_000_000))
+    ctx.set_system_prompt("You are codelet. " * 100)
+    ctx.add_user_message("Inspect the codebase")
+    ctx.note_usage(anth_resp.usage)
+    assert ctx.estimate_tokens() == 101_526
+    bd = ctx.breakdown()
+    assert bd["used"] == 101_526
+    assert bd["pct"] == pytest.approx(10.2, abs=0.1)
+    assert bd["segments"]["system"] > 10_000  # no longer squashed to ~12
+
+    # Telemetry records accurate total input, uncached input, hit rate, and cache-aware cost
+    t = Telemetry()
+    row = t.record_chat("claude-sonnet-4-5", anth_resp.usage, context_tokens=ctx.estimate_tokens())
+    assert row.input_tokens == 101_526
+    assert row.effective_uncached_input == 26
+    assert row.cache_read_tokens == 100_000
+    assert row.cache_write_tokens == 1_500
+    stats = t.cache_stats()
+    assert stats["latest_uncached_in"] == 26
+    assert stats["total_uncached_in"] == 26
+    assert stats["latest_hit_pct"] == pytest.approx(round(100_000 / 101_526 * 100, 1))
+    # Cost uses 1x input ($3), 0.1x cache_read ($0.30), 1.25x cache_write ($3.75), output ($15)
+    expected_cost = (
+        (26 / 1_000_000) * 3.0
+        + (100_000 / 1_000_000) * 0.3
+        + (1_500 / 1_000_000) * 3.75
+        + (200 / 1_000_000) * 15.0
+    )
+    assert row.cost_usd == pytest.approx(expected_cost, rel=1e-6)
+
+    # 2. OpenAI-compatible relay forwarding Claude with exclusive prompt_tokens < cached_tokens
+    relay_usage = OpenAICompatClient._extract_usage(SimpleNamespace(
+        prompt_tokens=500,
+        completion_tokens=100,
+        prompt_tokens_details=SimpleNamespace(cached_tokens=9_500),
+    ))
+    assert relay_usage["cache_exclusive"] is True
+    assert relay_usage["total_input_tokens"] == 10_000
+    assert resolve_input_tokens(relay_usage) == (10_000, 500, 9_500, 0)
+
+    t_relay = Telemetry()
+    t_relay.record_chat("anthropic/claude-opus-4.5", relay_usage)
+    r_stats = t_relay.cache_stats()
+    assert r_stats["latest_uncached_in"] == 500
+    assert r_stats["latest_hit_pct"] == 95.0
+
+    # 3. Standard OpenAI inclusive payload (prompt_tokens >= cached_tokens) stays inclusive
+    oai_usage = OpenAICompatClient._extract_usage(SimpleNamespace(
+        prompt_tokens=10_000,
+        completion_tokens=100,
+        prompt_tokens_details=SimpleNamespace(cached_tokens=7_500),
+    ))
+    assert "cache_exclusive" not in oai_usage
+    assert oai_usage["total_input_tokens"] == 10_000
+    assert resolve_input_tokens(oai_usage) == (10_000, 2_500, 7_500, 0)
+
 
 
