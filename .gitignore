@@ -42,3 +42,9 @@ sb-cli-reports/
 
 # Desktop launcher generated per-machine (hardcodes a local conda env path)
 codelet-web.bat
+
+# Electron desktop build artifacts & dependencies
+desktop/node_modules/
+desktop/dist/
+desktop/backend-dist/
+desktop/build/

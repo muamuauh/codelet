@@ -1,0 +1,58 @@
+{
+  "name": "codelet-desktop",
+  "productName": "codelet",
+  "version": "0.1.0",
+  "author": "gjq00",
+  "description": "codelet Desktop — Local AI Coding Workbench",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron .",
+    "icons": "python scripts/gen-icons.py",
+    "build:backend": "pyinstaller --distpath backend-dist --workpath build/pyi -y scripts/codelet-backend.spec",
+    "build:electron": "electron-builder --win dir portable",
+    "dist": "electron-builder --win dir portable"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "io.github.gjq00.codelet",
+    "productName": "codelet",
+    "electronDist": "node_modules/electron/dist",
+    "asar": true,
+    "directories": {
+      "output": "dist",
+      "buildResources": "assets"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "backend.js",
+      "secrets.js",
+      "tray.js",
+      "splash.html",
+      "assets/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "backend-dist/codelet-backend",
+        "to": "backend/codelet-backend"
+      }
+    ],
+    "win": {
+      "icon": "assets/icon.ico",
+      "signAndEditExecutable": false,
+      "target": [
+        "dir",
+        "portable"
+      ]
+    },
+    "portable": {
+      "artifactName": "codelet-${version}-portable.exe"
+    }
+  }
+}

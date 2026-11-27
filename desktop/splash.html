@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>codelet</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card: #1e293b;
+      --border: #334155;
+      --fg: #f8fafc;
+      --muted: #94a3b8;
+      --accent: #10b981;
+      --danger: #f87171;
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f8fafc;
+        --card: #ffffff;
+        --border: #e2e8f0;
+        --fg: #0f172a;
+        --muted: #64748b;
+        --accent: #059669;
+        --danger: #dc2626;
+      }
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      height: 100%;
+      background: var(--bg);
+      color: var(--fg);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei UI", sans-serif;
+      display: grid;
+      place-items: center;
+      user-select: none;
+    }
+    .wrap {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 16px;
+      max-width: 540px;
+      padding: 32px;
+      text-align: center;
+    }
+    .logo {
+      width: 76px;
+      height: 76px;
+      filter: drop-shadow(0 8px 24px rgba(16, 185, 129, 0.2));
+    }
+    h1 {
+      font-size: 22px;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+    }
+    .status-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--muted);
+      font-size: 13.5px;
+    }
+    .spinner {
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      border: 2px solid var(--border);
+      border-top-color: var(--accent);
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .err-box {
+      display: none;
+      width: 100%;
+      text-align: left;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px;
+      margin-top: 8px;
+      user-select: text;
+    }
+    .err-title {
+      color: var(--danger);
+      font-weight: 600;
+      font-size: 13px;
+      margin-bottom: 8px;
+    }
+    .err-log {
+      font-family: Consolas, "Cascadia Code", monospace;
+      font-size: 11.5px;
+      line-height: 1.45;
+      color: var(--muted);
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 180px;
+      overflow: auto;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <svg class="logo" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+      <defs>
+        <linearGradient id="codeletGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stop-color="#38bdf8"/>
+          <stop offset="50%" stop-color="#10b981"/>
+          <stop offset="100%" stop-color="#22c55e"/>
+        </linearGradient>
+        <linearGradient id="innerGlow" x1="0%" y1="0%" x2="0%" y2="100%">
+          <stop offset="0%" stop-color="#1e293b"/>
+          <stop offset="100%" stop-color="#0f172a"/>
+        </linearGradient>
+      </defs>
+      <rect x="12" y="12" width="104" height="104" rx="26" fill="url(#innerGlow)" stroke="#334155" stroke-width="3"/>
+      <polygon points="64,26 98,64 64,102 30,64" fill="none" stroke="url(#codeletGrad)" stroke-width="6.5" stroke-linejoin="round"/>
+      <polyline points="49,56 59,64 49,72" fill="none" stroke="#f8fafc" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round"/>
+      <line x1="65" y1="72" x2="79" y2="72" stroke="#38bdf8" stroke-width="5.5" stroke-linecap="round"/>
+    </svg>
+    <h1>codelet</h1>
+    <div class="status-row" id="status-row">
+      <div class="spinner" id="spinner"></div>
+      <span id="status-text">正在启动本地 AI 工作台后端…</span>
+    </div>
+    <div class="err-box" id="err-box">
+      <div class="err-title">后端启动失败</div>
+      <pre class="err-log" id="err-log"></pre>
+    </div>
+  </div>
+  <script>
+    window.__setSplashStatus = function (text) {
+      var el = document.getElementById("status-text");
+      if (el) el.textContent = text;
+    };
+    window.__setSplashError = function (msg) {
+      var sp = document.getElementById("spinner");
+      var st = document.getElementById("status-text");
+      var box = document.getElementById("err-box");
+      var log = document.getElementById("err-log");
+      if (sp) sp.style.display = "none";
+      if (st) st.textContent = "无法连接到 codelet 后端";
+      if (log) log.textContent = msg || "Unknown error";
+      if (box) box.style.display = "block";
+    };
+  </script>
+</body>
+</html>
