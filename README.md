@@ -4,18 +4,18 @@
 
 <h1>codelet</h1>
 
-<p><strong>轻量、透明、可扩展的 AI 编码助手框架与本地三栏 Web 工作台</strong></p>
+<p><strong>轻量、透明、可扩展的 AI 编码助手框架、三栏 Web 工作台与 Windows 桌面客户端</strong></p>
 
 <p>
-  异步并行 Agent Loop · 原生 Cockpit 监控驾驶舱 · 四档权限与思考强度调节 · /btw 隔离侧栏问答 · 两层能力集（Plugins + Tools/Skills）· GitHub Skill 热安装
+  异步并行 Agent Loop · 原生 Cockpit 监控驾驶舱 · 四档权限与思考强度调节 · /btw 隔离侧栏问答 · 两层能力集（Plugins + Tools/Skills）· Windows 桌面版（DPAPI 加密设置 / 自动更新 / 右键打开）
 </p>
 
 <p>
   <img src="https://img.shields.io/static/v1?label=Version&message=v0.1.0&color=10b981&style=flat-square" alt="Version" />
-  <img src="https://img.shields.io/static/v1?label=Tests&message=342+passed&color=22c55e&style=flat-square" alt="Tests" />
+  <img src="https://img.shields.io/static/v1?label=Tests&message=354+passed&color=22c55e&style=flat-square" alt="Tests" />
   <img src="https://img.shields.io/static/v1?label=License&message=MIT&color=2563eb&style=flat-square" alt="License" />
   <img src="https://img.shields.io/static/v1?label=Python&message=3.10%2B&color=0f172a&style=flat-square" alt="Python" />
-  <img src="https://img.shields.io/static/v1?label=UI&message=CLI+%7C+Web&color=0284c7&style=flat-square" alt="UI" />
+  <img src="https://img.shields.io/static/v1?label=UI&message=CLI+%7C+Web+%7C+Desktop&color=0284c7&style=flat-square" alt="UI" />
   <img src="https://img.shields.io/static/v1?label=Platform&message=Windows+%7C+macOS+%7C+Linux&color=475569&style=flat-square" alt="Platform" />
 </p>
 
@@ -53,8 +53,8 @@
 | 模块 | 核心能力 |
 | :--- | :--- |
 | **异步并行 Agent Loop** | 原生 `asyncio` 驱动，单轮多 `tool_use` 经 `asyncio.gather` 并发执行并严格按原始顺序回填，单个工具异常自动隔离不拖垮整轮；支持实时 Token / 推理链（`reasoning_delta` / `thinking_delta`）流式输出与生成中随时 **Stop** 中断。 |
-| **原生 Cockpit 驾驶舱** | 内置 `cockpit` 插件（默认启用）：SVG 上下文环形仪表盘 + 5 段悬浮构成明细（system / tools / assistant / user / free）+ 一键 `/compact`；缓存命中率与累计消耗；TTFT / 均值 / P95 延迟与 `tok/s` 近 24 轮趋势图；跨会话持久化本地今日 / 7 日消费统计与模型分布（支持可选接入服务端余额接口）。 |
-| **三栏可拖拽 Web 工作台** | 纯原生 HTML/CSS/JS（无前端构建链，仅监听 `127.0.0.1`），左右侧栏支持鼠标拖拉调宽（自动持久化、双击复位）；顶栏上下文进度环、`Ctrl+K` 全局命令面板、明暗主题切换、图片粘贴/拖拽多模态、工作区盘符级目录切换、Git 变更与彩色 Diff 查看器。 |
+| **原生 Cockpit 驾驶舱** | 内置 `cockpit` 插件（默认启用）：顶部支持按项目筛选、历史会话检视与自动刷新间隔（`3s/5s/10s/30s`）；SVG 上下文环形仪表盘 + 5 段悬浮构成明细 + 一键 `/compact`；缓存命中率与累计消耗；TTFT / 均值 / P95 延迟与 `tok/s` 近 24 轮趋势图；跨会话今日 / 7 日消费统计与模型分布（不绑定特定中转站余额）。 |
+| **桌面客户端与三栏工作台** | 提供 **Windows 独立桌面版**（Electron + 内置 PyInstaller 后端，零 Python 环境开箱即用）：支持系统托盘常驻、资源管理器右键“Open with codelet”、`electron-updater` 自动检查更新；内置可视化 **API 与模型设置弹窗**（Windows DPAPI 加密存储 API Key、不落明文）、方案级**自定义模型目录（API ID / 显示名称映射）**与**中转站 AI 读文档自动发现模型**；一体化输入卡片、按工作区分组的会话列表及按工作区独立记住插件/工具/技能与折叠状态。 |
 | **`/btw` 隔离侧栏问答** | 独立上下文旁路提问面板（Web 右侧 `Side /btw` Tab + CLI `/btw`），可附带主对话只读快照但**绝不污染主上下文**，即使主回合正在运行中也可以并发提问。 |
 | **动态模型目录与多 Provider** | 自动从 OpenAI 兼容端点（`GET /v1/models`）拉取最新模型目录并本地 TTL 缓存（默认 24h），带搜索、厂商分组、上下文窗口 / 价格 / Vision / Reasoning 能力标签与一键刷新；定价与上下文上限自动同步到遥测与压缩预算。 |
 | **四层上下文压缩与 SubAgent** | L0 超长输出落盘 → L1 零 LLM 清理旧工具结果 → L2 七节结构化滚动摘要（以服务商 `input_tokens` 为锚，保留 todo 列表）→ L3 保持 `tool_use/tool_result` 配对的硬上限；支持 `task` 并行子代理（深度上限 2、隔离上下文）。 |
@@ -116,9 +116,23 @@ codelet 采用清晰的两层能力架构，左侧栏直观分区、全部支持
 
 ## 快速开始
 
+### 方式 A：直接下载 Windows 桌面客户端（推荐，零 Python 环境）
+
+前往 [GitHub Releases](https://github.com/muamuauh/codelet/releases/latest) 下载适合你的安装包：
+
+| 安装包 | 说明 |
+| :--- | :--- |
+| **`codelet-Setup-x.y.z.exe`**（推荐） | 标准 Windows 安装程序（默认装到用户目录、免管理员权限、自动创建桌面/开始菜单快捷方式、注册资源管理器右键 **Open with codelet**、冷启动最快、支持 `electron-updater` 自动更新） |
+| **`codelet-x.y.z-portable.exe`** | 单文件便携版，下载后双击即用，不写入安装记录 |
+| **`codelet-x.y.z-win-x64-unpacked.zip`** | 解压即用目录版，解压后直接运行 `codelet.exe` |
+
+打开后点击右上角齿轮图标（**API 与模型设置**）填入任意 OpenAI 兼容端点或 Anthropic 的 `Base URL` 与 `API Key`（通过 Windows DPAPI 加密保存，绝不落明文），配置好默认模型后即可直接开用；如果使用自定义中转站，还支持一键由当前模型自动阅读中转站文档并拉取可用模型目录。
+
+### 方式 B：从源码运行（CLI / Web / 桌面开发模式）
+
 > Windows + miniconda 详细实操与排坑指南见 [USAGE.md](./USAGE.md)。
 
-### 1. 安装环境
+#### 1. 安装环境
 
 ```bash
 conda create -n codelet python=3.10 -y

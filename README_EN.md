@@ -4,18 +4,18 @@
 
 <h1>codelet</h1>
 
-<p><strong>Lightweight, Transparent, Extensible AI Coding Agent Framework &amp; Local 3-Pane Web Workbench</strong></p>
+<p><strong>Lightweight, Transparent, Extensible AI Coding Agent Framework, 3-Pane Web Workbench &amp; Windows Desktop App</strong></p>
 
 <p>
-  Async Parallel Agent Loop · Native Cockpit Telemetry · 4 Modes &amp; 5 Thinking Efforts · Isolated /btw Side Q&amp;A · 2-Layer Capabilities · GitHub Skill Hot-Install
+  Async Parallel Agent Loop · Native Cockpit Telemetry · 4 Modes &amp; 5 Thinking Efforts · Isolated /btw Side Q&amp;A · 2-Layer Capabilities · Windows Desktop (DPAPI Vault / Auto-Update / Explorer Context Menu)
 </p>
 
 <p>
   <img src="https://img.shields.io/static/v1?label=Version&message=v0.1.0&color=10b981&style=flat-square" alt="Version" />
-  <img src="https://img.shields.io/static/v1?label=Tests&message=342+passed&color=22c55e&style=flat-square" alt="Tests" />
+  <img src="https://img.shields.io/static/v1?label=Tests&message=354+passed&color=22c55e&style=flat-square" alt="Tests" />
   <img src="https://img.shields.io/static/v1?label=License&message=MIT&color=2563eb&style=flat-square" alt="License" />
   <img src="https://img.shields.io/static/v1?label=Python&message=3.10%2B&color=0f172a&style=flat-square" alt="Python" />
-  <img src="https://img.shields.io/static/v1?label=UI&message=CLI+%7C+Web&color=0284c7&style=flat-square" alt="UI" />
+  <img src="https://img.shields.io/static/v1?label=UI&message=CLI+%7C+Web+%7C+Desktop&color=0284c7&style=flat-square" alt="UI" />
   <img src="https://img.shields.io/static/v1?label=Platform&message=Windows+%7C+macOS+%7C+Linux&color=475569&style=flat-square" alt="Platform" />
 </p>
 
@@ -52,8 +52,8 @@
 | Module | Capabilities |
 | :--- | :--- |
 | **Async Parallel Agent Loop** | Native `asyncio` loop dispatching multiple tool calls concurrently via `asyncio.gather` while preserving exact `tool_use` order and isolating per-tool errors; streams text & reasoning deltas (`reasoning_delta` / `thinking_delta`) with instant **Stop** cancellation. |
-| **Native Cockpit Plugin** | Default-enabled `cockpit` plugin featuring a live SVG context ring + 5-segment hover breakdown (`system / tools / assistant / user / free`) + one-click `/compact`, prompt cache hit rate, TTFT/Avg/P95 latency & `tok/s` 24-turn trend charts, and cross-session today / 7-day spend & model distribution charts (with optional provider balance integration). |
-| **Resizable 3-Pane Web Workbench** | Pure HTML/CSS/JS (no build chain, bound to `127.0.0.1`) with draggable left/right panes (persisted in `localStorage`, double-click to reset), topbar context gauge pill, `Ctrl+K` global command palette, light/dark themes, image paste/drag-drop multimodal input, drive-root workspace switcher, and Git Changes + colored diff viewer. |
+| **Native Cockpit Plugin** | Default-enabled `cockpit` plugin featuring project/session selector & auto-refresh toolbar, live SVG context ring + 5-segment hover breakdown + one-click `/compact`, prompt cache hit rate, TTFT/Avg/P95 latency & `tok/s` 24-turn trend charts, and provider-agnostic cross-session today / 7-day spend & model distribution charts. |
+| **Windows Desktop & 3-Pane Workbench** | Standalone **Windows Desktop App** (Electron + bundled PyInstaller FastAPI sidecar — zero Python setup) with native system tray, Explorer right-click **"Open with codelet"**, `electron-updater` GitHub Releases auto-update, in-app **API & Model Settings modal** (Windows DPAPI encrypted vault), per-profile **Model Directory** (API ID + custom display names) & **AI relay docs auto-discovery**, unified composer, workspace-grouped Conversations, and per-workspace persistence for Plugins/Tools/Skills/fold states. |
 | **Isolated `/btw` Side Q&A** | Dedicated side-panel Q&A (`Side /btw` tab & CLI `/btw`) with optional read-only main-context snapshot — **never mutates main conversation messages** and runs concurrently even while a main turn is busy. |
 | **Dynamic Model Catalog** | Periodically fetches models from OpenAI-compatible endpoints (`GET /v1/models`) with local TTL disk cache, searchable picker, vendor tabs, context length / pricing / vision / reasoning badges, and automatic pricing + context-window sync. |
 | **4-Layer Compaction & SubAgents** | L0 large-output spill → L1 zero-LLM old tool output clearing → L2 7-section structured rolling summary (usage-anchored, preserving todos) → L3 pair-safe hard ceiling; parallel isolated `task` subagents (max depth 2). |
@@ -89,6 +89,17 @@
 ---
 
 ## Quick Start
+
+### Option A: Download Windows Desktop App (Recommended, Zero Setup)
+
+Download from [GitHub Releases](https://github.com/muamuauh/codelet/releases/latest):
+- **`codelet-Setup-x.y.z.exe`** *(Recommended)* — Per-user NSIS installer (no admin required, Start Menu/Desktop shortcuts, Explorer right-click **"Open with codelet"**, fastest startup, automatic GitHub Releases update checks).
+- **`codelet-x.y.z-portable.exe`** — Single-file portable executable.
+- **`codelet-x.y.z-win-x64-unpacked.zip`** — Extract and run `codelet.exe` directly.
+
+Click the top-right **Settings (⚙)** button to configure your provider, Base URL, and API Key (stored encrypted via Windows DPAPI).
+
+### Option B: Run from Source (CLI / Web / Desktop Dev)
 
 ```bash
 conda create -n codelet python=3.10 -y
