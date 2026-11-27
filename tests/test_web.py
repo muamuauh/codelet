@@ -48,6 +48,7 @@ def client(monkeypatch, tmp_path):
     from codelet.llm.models import ModelCatalog
     monkeypatch.setattr("codelet.agent_loop.build_client", lambda config: ScriptedClient())
     monkeypatch.setattr("codelet.plugins.builtin.cockpit.default_usage_path", lambda: tmp_path / "cockpit_usage.jsonl")
+    monkeypatch.setattr("codelet.web.server._workspace_states_file", lambda: tmp_path / "workspace_states.json")
     return TestClient(create_app(
         catalog=ModelCatalog(cache_path=tmp_path / "models_cache.json"),
         auto_refresh=False,

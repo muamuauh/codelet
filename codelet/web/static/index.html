@@ -98,14 +98,32 @@
             </svg>
             <span id="topCtxPct" class="mono">0%</span>
           </button>
-          <div class="tel tel-turn">
-            <span class="tl">Turn</span>
-            <b id="tt-in">0</b><span class="u">in</span> · <b id="tt-out">0</b><span class="u">out</span>
-          </div>
-          <div class="tel tel-sess">
-            <span class="tl">Session</span>
-            <b id="ts-in">0</b><span class="u">in</span> · <b id="ts-out">0</b><span class="u">out</span>
-            · <b id="ts-cost" title="Estimated from settings.json &amp; model catalog pricing">n/a</b>
+          <div class="tel-wrap" id="tel-wrap">
+            <button id="tel-pill" class="tel-pill" type="button" aria-expanded="false" title="查看本轮与当前会话 Token / 花费明细">
+              <span class="tel tel-turn">
+                <span class="tl">Turn</span>
+                <b id="tt-in">0</b><span class="u">in</span>·<b id="tt-out">0</b><span class="u">out</span>
+              </span>
+              <span class="tel-sep" aria-hidden="true"></span>
+              <span class="tel tel-sess">
+                <span class="tl">Session</span>
+                <b id="ts-in">0</b><span class="u">in</span>·<b id="ts-out">0</b><span class="u">out</span>·<b id="ts-cost">n/a</b>
+              </span>
+              <span class="tel tel-short">
+                <span class="tel-short-tok"><b id="ts-short-tok">0</b><span class="u">tok</span>·</span><b id="ts-short-cost">n/a</b>
+              </span>
+              <svg class="ic tel-chev" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>
+            </button>
+            <div id="tel-popover" class="tel-popover hidden" role="dialog" aria-label="Usage details">
+              <div class="tp-head">
+                <span class="tp-title">用量与花费明细</span>
+                <button id="tp-open-cockpit" class="tp-link" type="button">打开 Cockpit →</button>
+              </div>
+              <div class="tp-row"><span class="tp-k">本轮 Turn</span><span class="tp-v mono"><b id="tp-turn-in">0</b> in · <b id="tp-turn-out">0</b> out</span></div>
+              <div class="tp-row"><span class="tp-k">会话 Session</span><span class="tp-v mono"><b id="tp-sess-in">0</b> in · <b id="tp-sess-out">0</b> out</span></div>
+              <div class="tp-row"><span class="tp-k">估算花费</span><span class="tp-v mono" id="tp-cost">n/a</span></div>
+              <div class="tp-row"><span class="tp-k">上下文占用</span><span class="tp-v mono" id="tp-ctx">0%</span></div>
+            </div>
           </div>
           <button id="open-settings" class="top-btn settings-btn" type="button" title="API &amp; Model Settings" aria-label="Settings">
             <svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>

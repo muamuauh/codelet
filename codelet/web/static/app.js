@@ -220,19 +220,25 @@ function summarizeToolInput(name, input) {
   return s.length > 72 ? s.slice(0, 71) + "…" : s;
 }
 
-// ---------- messages ----------
+// ---------- messages & collapsible turn trace ----------
 function addMessage(role) {
   const msg = el("div", `msg ${role}`);
   msg.appendChild(el("div", "avatar", role === "assistant" ? "◆" : "U"));
   const body = el("div", "body");
   const head = el("div", "msg-head");
   head.appendChild(el("div", "who", role === "assistant" ? "codelet" : "You"));
-  const entry = { msg, body, bubble: null, text: "", reasoning: "", thinkBox: null, thinkPre: null };
+  const entry = {
+    msg, body, bubble: null, text: "", fallbackNotes: [],
+    traceEl: null, traceSteps: null, traceLabel: null, traceMeta: null,
+    activeThinkBody: null, activeThinkText: "",
+    toolCount: 0, toolNames: [], errCount: 0, thinkCount: 0,
+    startedAt: Date.now(), finalized: false,
+  };
   if (role === "assistant") {
     const copyBtn = el("button", "msg-copy");
     copyBtn.type = "button";
     copyBtn.innerHTML = SVG_COPY + "<span>Copy</span>";
-    copyBtn.onclick = () => copyText(entry.text, copyBtn, true);
+    copyBtn.onclick = () => copyText(entry.text || entry.fallbackNotes.join("\n\n"), copyBtn, true);
     head.appendChild(copyBtn);
   }
   body.appendChild(head);
@@ -246,6 +252,161 @@ function addMessage(role) {
 }
 function ensureAssistant() { return current || (current = addMessage("assistant")); }
 function clearThinking(a) { const t = a.body.querySelector(".thinking"); if (t) t.remove(); }
+
+function ensureTrace(a, { open = true, running = true } = {}) {
+  if (a.traceEl) return a.traceEl;
+  const d = document.createElement("details");
+  d.className = "turn-trace" + (running ? " running" : "");
+  d.open = open;
+  const sum = document.createElement("summary");
+  sum.className = "trace-summary";
+  sum.innerHTML = '<svg class="ic trace-chev" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"/></svg><span class="trace-dot"></span>';
+  const lbl = el("span", "trace-label", running ? "思考与执行中…" : "执行过程");
+  const meta = el("span", "trace-meta mono", "");
+  sum.appendChild(lbl);
+  sum.appendChild(meta);
+  const steps = el("div", "trace-steps");
+  d.appendChild(sum);
+  d.appendChild(steps);
+  // Always place the execution trace ABOVE the final answer bubble.
+  a.body.insertBefore(d, a.bubble);
+  a.traceEl = d;
+  a.traceSteps = steps;
+  a.traceLabel = lbl;
+  a.traceMeta = meta;
+  return d;
+}
+
+function summarizeToolCounts(names) {
+  if (!names || !names.length) return "";
+  const counts = new Map();
+  names.forEach((n) => counts.set(n, (counts.get(n) || 0) + 1));
+  const pairs = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  const top = pairs.slice(0, 3).map(([k, v]) => (v > 1 ? `${k} ×${v}` : k));
+  if (pairs.length > 3) top.push(`+${pairs.length - 3}`);
+  return top.join(", ");
+}
+
+function updateTraceSummary(a, { done = false, cancelled = false, showDuration = true } = {}) {
+  if (!a || !a.traceEl) return;
+  a.traceEl.classList.toggle("running", !done);
+  a.traceEl.classList.toggle("has-err", a.errCount > 0);
+  const toolsSummary = summarizeToolCounts(a.toolNames);
+  const parts = [];
+  if (!done) {
+    if (a.toolCount > 0) {
+      parts.push(`正在执行 · 已调用 ${a.toolCount} 个工具`);
+      if (toolsSummary) parts.push(`(${toolsSummary})`);
+    } else if (a.thinkCount > 0) {
+      parts.push("正在思考…");
+    } else {
+      parts.push("执行中…");
+    }
+    a.traceLabel.textContent = parts.join(" ");
+    a.traceMeta.textContent = "运行中";
+    return;
+  }
+
+  if (a.thinkCount > 0 && a.toolCount > 0) {
+    parts.push(`已完成思考 · 调用 ${a.toolCount} 个工具`);
+  } else if (a.toolCount > 0) {
+    parts.push(`调用 ${a.toolCount} 个工具`);
+  } else if (a.thinkCount > 0) {
+    parts.push("已完成思考");
+  } else {
+    parts.push("执行过程");
+  }
+  if (toolsSummary) parts.push(`(${toolsSummary})`);
+  if (a.errCount > 0) parts.push(`· ${a.errCount} 失败`);
+  if (cancelled) parts.push("· 已中断");
+  a.traceLabel.textContent = parts.join(" ");
+  if (showDuration && a.startedAt) {
+    const sec = Math.max(0.1, (Date.now() - a.startedAt) / 1000);
+    a.traceMeta.textContent = sec >= 60 ? `${Math.floor(sec / 60)}m ${(sec % 60).toFixed(0)}s` : `${sec.toFixed(1)}s`;
+  } else {
+    a.traceMeta.textContent = "";
+  }
+}
+
+function appendTraceNote(a, text) {
+  const clean = (text || "").trim();
+  if (!clean) return;
+  ensureTrace(a, { open: !a.finalized, running: !a.finalized });
+  a.fallbackNotes.push(clean);
+  const note = el("div", "trace-note md");
+  note.innerHTML = renderMarkdown(clean);
+  wireCodeCopies(note);
+  a.traceSteps.appendChild(note);
+}
+
+function appendTraceThinking(a, text, { streaming = false } = {}) {
+  ensureTrace(a, { open: !a.finalized, running: !a.finalized });
+  if (streaming && a.activeThinkBody) {
+    a.activeThinkText += text;
+    a.activeThinkBody.textContent = a.activeThinkText;
+    return;
+  }
+  const box = el("div", "trace-think");
+  const head = el("div", "trace-think-head");
+  head.innerHTML = SVG_BRAIN + "<span>思考过程</span>";
+  const body = el("div", "trace-think-body", text || "");
+  box.appendChild(head);
+  box.appendChild(body);
+  a.traceSteps.appendChild(box);
+  a.thinkCount += 1;
+  if (streaming) {
+    a.activeThinkBody = body;
+    a.activeThinkText = text || "";
+  }
+}
+
+function appendToolCard(a, { name, input, output = "", is_error = false, status = "running" }) {
+  ensureTrace(a, { open: !a.finalized, running: !a.finalized });
+  const card = el("div", "tool");
+  const head = el("div", "head");
+  head.innerHTML = SVG_CHEV_R;
+  head.appendChild(el("span", "tname", name || "?"));
+  const summary = summarizeToolInput(name, input);
+  if (summary) head.appendChild(el("span", "tsum", summary));
+  const badgeCls = status === "running" ? "run" : (is_error ? "err" : "ok");
+  const badgeTxt = status === "running" ? "running" : (is_error ? "error" : "ok");
+  head.appendChild(el("span", `badge ${badgeCls}`, badgeTxt));
+  head.onclick = () => card.classList.toggle("open");
+  const tbody = el("div", "tbody");
+  if (input && typeof input === "object" && Object.keys(input).length > 0) {
+    tbody.appendChild(el("div", "t-sec-lbl", "Input"));
+    tbody.appendChild(el("div", "args", JSON.stringify(input, null, 2)));
+  }
+  if (output) {
+    tbody.appendChild(el("div", "t-sec-lbl", "Output"));
+    tbody.appendChild(el("div", "out", output));
+  }
+  card.appendChild(head);
+  card.appendChild(tbody);
+  card._name = name;
+  card._done = status !== "running";
+  card._tbody = tbody;
+  if (is_error) card.classList.add("open");
+  a.traceSteps.appendChild(card);
+  a.toolCount += 1;
+  a.toolNames.push(name || "?");
+  if (is_error) a.errCount += 1;
+  return card;
+}
+
+function finalizeAssistantTurn(a, { cancelled = false } = {}) {
+  if (!a || a.finalized) return;
+  a.finalized = true;
+  a.activeThinkBody = null;
+  clearThinking(a);
+  const hasFinalText = Boolean((a.text || "").trim());
+  a.bubble.classList.toggle("empty-bubble", !hasFinalText);
+  if (a.traceEl) {
+    updateTraceSummary(a, { done: true, cancelled, showDuration: true });
+    // Collapse thinking & tool calls automatically once the final answer is ready.
+    a.traceEl.open = !hasFinalText || cancelled;
+  }
+}
 
 // ---------- incoming WS frames ----------
 function render(ev) {
@@ -272,25 +433,16 @@ function render(ev) {
     case "thinking": return onThinking(ev.on);
     case "reasoning_delta": {
       const a = ensureAssistant(); clearThinking(a);
-      if (!a.thinkBox) {
-        const d = document.createElement("details");
-        d.className = "thinking-box"; d.open = true;
-        const s = document.createElement("summary");
-        s.innerHTML = SVG_BRAIN + "<span>Thought process</span>";
-        const pre = el("div", "thinking-text");
-        d.appendChild(s); d.appendChild(pre);
-        a.body.insertBefore(d, a.bubble);
-        a.thinkBox = d; a.thinkPre = pre;
-      }
-      a.reasoning += ev.text;
-      a.thinkPre.textContent = a.reasoning;
+      appendTraceThinking(a, ev.text || "", { streaming: true });
+      updateTraceSummary(a, { done: false });
       if (atBottom()) scroll();
       return;
     }
     case "text_delta": {
       const a = ensureAssistant(); clearThinking(a);
-      if (a.thinkBox && !a.text) a.thinkBox.open = false;
+      a.activeThinkBody = null;
       a.text += ev.text;
+      a.bubble.classList.remove("empty-bubble");
       setAssistantMarkdown(a);
       if (atBottom()) scroll();
       return;
@@ -298,26 +450,24 @@ function render(ev) {
     case "stream_end": return;
     case "tool_start": {
       const a = ensureAssistant(); clearThinking(a);
-      const card = el("div", "tool");
-      const head = el("div", "head");
-      head.innerHTML = SVG_CHEV_R;
-      head.appendChild(el("span", "tname", ev.name));
-      const summary = summarizeToolInput(ev.name, ev.input);
-      if (summary) head.appendChild(el("span", "tsum", summary));
-      head.appendChild(el("span", "badge run", "running"));
-      head.onclick = () => card.classList.toggle("open");
-      const tbody = el("div", "tbody");
-      tbody.appendChild(el("div", "t-sec-lbl", "Input"));
-      tbody.appendChild(el("div", "args", JSON.stringify(ev.input || {}, null, 2)));
-      card.appendChild(head); card.appendChild(tbody);
-      card._name = ev.name; card._done = false; card._tbody = tbody;
-      a.body.appendChild(card);
+      a.activeThinkBody = null;
+      // Any text emitted before a tool call is intermediate narration -> move it into the trace above the final answer.
+      if (a.text.trim()) {
+        appendTraceNote(a, a.text);
+        a.text = "";
+        a.bubble.innerHTML = "";
+        a.bubble.classList.add("empty-bubble");
+      }
+      appendToolCard(a, { name: ev.name, input: ev.input || {}, status: "running" });
+      if (a.traceEl) a.traceEl.open = true;
+      updateTraceSummary(a, { done: false });
       if (atBottom()) scroll();
       return;
     }
     case "tool_result": {
       const a = ensureAssistant();
-      const card = [...a.body.querySelectorAll(".tool")].reverse().find((c) => c._name === ev.name && !c._done);
+      const scope = a.traceSteps || a.body;
+      const card = [...scope.querySelectorAll(".tool")].reverse().find((c) => c._name === ev.name && !c._done);
       if (card) {
         card._done = true;
         const badge = card.querySelector(".badge");
@@ -327,8 +477,12 @@ function render(ev) {
           card._tbody.appendChild(el("div", "t-sec-lbl", "Output"));
           card._tbody.appendChild(el("div", "out", ev.output));
         }
-        if (ev.is_error) card.classList.add("open");
+        if (ev.is_error) {
+          card.classList.add("open");
+          a.errCount += 1;
+        }
       }
+      updateTraceSummary(a, { done: false });
       if (["write_file", "edit_file", "bash"].includes(ev.name) && activeInspectorTab === "changes" && $("app").classList.contains("insp-open")) {
         loadGitChanges();
       }
@@ -339,9 +493,19 @@ function render(ev) {
     case "permission_request": return showDiff(ev);
     case "telemetry": return onTelemetry(ev);
     case "turn_cancelled":
-    case "turn_done": if (current) clearThinking(current); current = null; setBusy(false); return;
+    case "turn_done": {
+      if (current) finalizeAssistantTurn(current, { cancelled: ev.type === "turn_cancelled" });
+      current = null; setBusy(false);
+      if (atBottom()) scroll();
+      return;
+    }
     case "resumed": return onResumed(ev);
-    case "error": { transcript.appendChild(el("div", "note error", ev.message)); current = null; setBusy(false); toggleEmpty(); scroll(); return; }
+    case "error": {
+      if (current) finalizeAssistantTurn(current, { cancelled: true });
+      transcript.appendChild(el("div", "note error", ev.message));
+      current = null; setBusy(false); toggleEmpty(); scroll();
+      return;
+    }
   }
 }
 
@@ -352,9 +516,20 @@ function onThinking(on) {
 }
 function onTelemetry(ev) {
   const t = ev.turn || {}, s = ev.session || {};
-  $("tt-in").textContent = fmt(t.input_tokens); $("tt-out").textContent = fmt(t.output_tokens);
-  $("ts-in").textContent = fmt(s.input_tokens); $("ts-out").textContent = fmt(s.output_tokens);
-  $("ts-cost").textContent = s.cost_usd == null ? "n/a" : "~$" + s.cost_usd.toFixed(4);
+  const costText = s.cost_usd == null ? "n/a" : "~$" + s.cost_usd.toFixed(4);
+  const totSessTok = (s.input_tokens || 0) + (s.output_tokens || 0);
+  // Compact inline numbers in topbar so narrow panes never clip
+  $("tt-in").textContent = fmtCompact(t.input_tokens); $("tt-out").textContent = fmtCompact(t.output_tokens);
+  $("ts-in").textContent = fmtCompact(s.input_tokens); $("ts-out").textContent = fmtCompact(s.output_tokens);
+  $("ts-cost").textContent = costText;
+  if ($("ts-short-tok")) $("ts-short-tok").textContent = fmtCompact(totSessTok);
+  if ($("ts-short-cost")) $("ts-short-cost").textContent = costText;
+  // Exact comma-formatted numbers in the expandable popover
+  if ($("tp-turn-in")) $("tp-turn-in").textContent = fmt(t.input_tokens);
+  if ($("tp-turn-out")) $("tp-turn-out").textContent = fmt(t.output_tokens);
+  if ($("tp-sess-in")) $("tp-sess-in").textContent = fmt(s.input_tokens);
+  if ($("tp-sess-out")) $("tp-sess-out").textContent = fmt(s.output_tokens);
+  if ($("tp-cost")) $("tp-cost").textContent = costText;
 }
 function onUiAction(ev) {
   if (ev.open_drawer) openInspector(ev.open_drawer);
@@ -503,6 +678,24 @@ document.querySelectorAll(".insp-tab").forEach((b) => b.addEventListener("click"
 $("ctx-pill").addEventListener("click", () => openInspector("cockpit"));
 $("btw-quick").addEventListener("click", () => openInspector("btw"));
 
+// Topbar collapsible telemetry popover
+function closeTelPopover() {
+  $("tel-popover")?.classList.add("hidden");
+  $("tel-pill")?.setAttribute("aria-expanded", "false");
+}
+$("tel-pill")?.addEventListener("click", (e) => {
+  e.stopPropagation();
+  const pop = $("tel-popover");
+  if (!pop) return;
+  const open = pop.classList.toggle("hidden") === false;
+  $("tel-pill").setAttribute("aria-expanded", open ? "true" : "false");
+});
+$("tp-open-cockpit")?.addEventListener("click", () => { closeTelPopover(); openInspector("cockpit"); });
+document.addEventListener("click", (e) => {
+  const wrap = $("tel-wrap");
+  if (wrap && !wrap.contains(e.target)) closeTelPopover();
+});
+
 // ---------- Cockpit rendering ----------
 function gaugeColor(pct) {
   if (pct >= 85) return "var(--err)";
@@ -539,6 +732,7 @@ function onCockpit(ev, { fromHistory = false } = {}) {
   mrFg.style.strokeDashoffset = String(56.55 * (1 - pct / 100));
   mrFg.style.stroke = color;
   $("ctx-pill").title = `Context: ${fmtCompact(ctx.used)} / ${fmtCompact(ctx.limit)} (${pct}%) — click for Cockpit`;
+  if ($("tp-ctx")) $("tp-ctx").textContent = `${fmtCompact(ctx.used)} / ${fmtCompact(ctx.limit)} (${pct}%)`;
 
   // Card 1: Context gauge + 5-segment popover
   $("ckRingFg").style.strokeDashoffset = String(251.33 * (1 - pct / 100));
@@ -1280,16 +1474,40 @@ function onResumed(ev) {
   transcript.innerHTML = ""; current = null;
   (ev.messages || []).forEach((m) => {
     const b = addMessage(m.role);
+    b.finalized = true;
     b.text = m.text || "";
-    if (m.role === "assistant") setAssistantMarkdown(b);
-    else b.bubble.textContent = b.text;
-    (m.tools || []).forEach((name) => {
-      const card = el("div", "tool");
-      const head = el("div", "head");
-      head.appendChild(el("span", "tname", name));
-      head.appendChild(el("span", "badge ok", "done"));
-      card.appendChild(head); b.body.appendChild(card);
-    });
+    if (m.role === "assistant") {
+      const steps = Array.isArray(m.steps) && m.steps.length
+        ? m.steps
+        : (m.tools || []).map((name) => ({ type: "tool", name, input: {}, output: "", is_error: false }));
+      if (steps.length) {
+        ensureTrace(b, { open: false, running: false });
+        steps.forEach((st) => {
+          if (st.type === "thinking" && st.text) appendTraceThinking(b, st.text, { streaming: false });
+          else if (st.type === "note" && st.text) appendTraceNote(b, st.text);
+          else if (st.type === "tool") {
+            appendToolCard(b, {
+              name: st.name,
+              input: st.input || {},
+              output: st.output || "",
+              is_error: Boolean(st.is_error),
+              status: "done",
+            });
+          }
+        });
+        updateTraceSummary(b, { done: true, showDuration: false });
+        // Keep collapsed when there is a final answer; expand only if there is no final text
+        b.traceEl.open = !b.text.trim();
+      }
+      if (b.text.trim()) {
+        b.bubble.classList.remove("empty-bubble");
+        setAssistantMarkdown(b);
+      } else {
+        b.bubble.classList.add("empty-bubble");
+      }
+    } else {
+      b.bubble.textContent = b.text;
+    }
   });
   current = null; toggleEmpty(); scroll(true);
 }
@@ -1943,7 +2161,6 @@ $("quit").addEventListener("click", async () => {
         if (payload.type === "new-chat") send({ type: "new_conversation" });
         else if (payload.type === "pick-workspace") openWorkspacePicker();
         else if (payload.type === "open-settings") openSettingsModal();
-        else if (payload.type === "open-workspace" && payload.path) send({ type: "set_workspace", path: payload.path });
         else if (payload.type === "open-workspace" && payload.path) send({ type: "set_workspace", path: payload.path });
       });
     }

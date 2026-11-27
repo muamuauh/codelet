@@ -125,6 +125,7 @@ def test_settings_apply_masks_secret_and_never_writes_plaintext_key(tmp_path, mo
 
     fake_settings = tmp_path / "settings.json"
     monkeypatch.setattr("codelet.web.server._user_settings_file", lambda: fake_settings)
+    monkeypatch.setattr("codelet.web.server._workspace_states_file", lambda: tmp_path / "workspace_states.json")
     monkeypatch.delenv("CODELET_TEST_SECRET_KEY", raising=False)
 
     tok = "settings-tok-789"
@@ -211,6 +212,7 @@ def test_profile_custom_model_directory_and_display_names(tmp_path, monkeypatch)
 
     fake_settings = tmp_path / "settings.json"
     monkeypatch.setattr("codelet.web.server._user_settings_file", lambda: fake_settings)
+    monkeypatch.setattr("codelet.web.server._workspace_states_file", lambda: tmp_path / "workspace_states.json")
     monkeypatch.setenv("CODELET_DIR_KEY", "sk-dir-test-1234")
 
     app = create_app(auto_refresh=False)
@@ -460,3 +462,121 @@ def test_per_workspace_persistence_plugins_tools_skills_and_ui_state(tmp_path, m
         assert any(p["name"] == "rag" and p["enabled"] is False for p in plugins_frame)
         assert any(t["name"] == sample_tool and t["enabled"] is True for t in tools_frame)
         assert ws_frame["ui_state"] == {}
+
+
+def test_persists_selected_model_and_thinking_effort(tmp_path, monkeypatch):
+    ws_a = tmp_path / "ws_model_a"
+    ws_b = tmp_path / "ws_model_b"
+    ws_a.mkdir()
+    ws_b.mkdir()
+
+    states_file = tmp_path / "workspace_states.json"
+    monkeypatch.setattr("codelet.web.server._workspace_states_file", lambda: states_file)
+    monkeypatch.setattr("codelet.web.server._user_settings_file", lambda: tmp_path / "settings.json")
+    monkeypatch.chdir(ws_a)
+
+    app = create_app(auto_refresh=False)
+    client = TestClient(app)
+
+    # Pick a specific model & thinking effort in ws_a
+    with client.websocket_connect("/ws") as ws:
+        for _ in range(8):
+            ws.receive_json()
+        ws.send_json({"type": "set_model", "model": "anthropic/claude-opus-4.5"})
+        p1 = ws.receive_json()
+        assert p1["type"] == "profile" and p1["model"] == "anthropic/claude-opus-4.5"
+        assert ws.receive_json()["type"] == "cockpit"
+
+        ws.send_json({"type": "set_effort", "effort": "high"})
+        p2 = ws.receive_json()
+        assert p2["type"] == "profile" and p2["reasoning_effort"] == "high"
+        assert ws.receive_json()["type"] == "cockpit"
+
+    # Reconnect in ws_a -> must remember both model and reasoning_effort
+    with client.websocket_connect("/ws") as ws:
+        first = ws.receive_json()
+        assert first["type"] == "profile"
+        assert first["model"] == "anthropic/claude-opus-4.5"
+        assert first["reasoning_effort"] == "high"
+
+    # Brand new ws_b inherits the last-used defaults, and can override independently
+    monkeypatch.chdir(ws_b)
+    with client.websocket_connect("/ws") as ws:
+        first_b = ws.receive_json()
+        assert first_b["type"] == "profile"
+        assert first_b["model"] == "anthropic/claude-opus-4.5"
+        assert first_b["reasoning_effort"] == "high"
+        for _ in range(7):
+            ws.receive_json()
+        ws.send_json({"type": "set_model", "model": "deepseek/deepseek-v4"})
+        ws.receive_json()
+        ws.receive_json()
+        ws.send_json({"type": "set_effort", "effort": "low"})
+        ws.receive_json()
+        ws.receive_json()
+
+    # Returning to ws_a still restores ws_a's own remembered model & effort
+    monkeypatch.chdir(ws_a)
+    with client.websocket_connect("/ws") as ws:
+        first_a2 = ws.receive_json()
+        assert first_a2["type"] == "profile"
+        assert first_a2["model"] == "anthropic/claude-opus-4.5"
+        assert first_a2["reasoning_effort"] == "high"
+
+
+def test_transcript_groups_multi_step_tools_and_thinking_before_final_answer():
+    from codelet.web.server import _transcript
+
+    messages = [
+        {"role": "user", "content": "Check repo"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": "First read README"},
+                {"type": "text", "text": "Let me inspect README first."},
+                {"type": "tool_use", "id": "t1", "name": "read_file", "input": {"path": "README.md"}},
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "t1", "content": "# codelet", "is_error": False},
+            ],
+        },
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "tool_use", "id": "t2", "name": "bash", "input": {"command": "pytest -q"}},
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "t2", "content": "354 passed", "is_error": False},
+            ],
+        },
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": "All checks passed"},
+                {"type": "text", "text": "Everything looks healthy!"},
+            ],
+        },
+    ]
+
+    grouped = _transcript(messages)
+    assert len(grouped) == 2
+    assert grouped[0]["role"] == "user"
+    assert grouped[0]["text"] == "Check repo"
+
+    asst = grouped[1]
+    assert asst["role"] == "assistant"
+    assert asst["text"] == "Everything looks healthy!"
+    assert asst["tools"] == ["read_file", "bash"]
+    step_types = [s["type"] for s in asst["steps"]]
+    assert step_types == ["thinking", "note", "tool", "tool", "thinking"]
+    assert asst["steps"][2]["name"] == "read_file"
+    assert asst["steps"][2]["output"] == "# codelet"
+    assert asst["steps"][3]["name"] == "bash"
+    assert asst["steps"][3]["output"] == "354 passed"
+

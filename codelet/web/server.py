@@ -443,9 +443,9 @@ class Connection:
         self._active_turn_task: asyncio.Task[Any] | None = None
         self._btw_history: list[dict[str, str]] = []
         # State that survives an agent rebuild (new chat / workspace switch).
-        self.model: str | None = None      # None -> use the .env / profile default
+        self.model: str | None = None      # None -> restore workspace/default pref or .env/profile default
         self.mode = "ask"
-        self.effort = "auto"
+        self.effort: str | None = None     # None -> restore workspace/default pref or "auto"
         self.workspace = os.getcwd()
         self.store: SessionStore | None = None
         self.agent: AgentLoop = None  # type: ignore[assignment]
@@ -456,8 +456,9 @@ class Connection:
 
     def _build(self) -> None:
         """(Re)build the agent + session store in the current working directory,
-        preserving the chosen model/mode and restoring per-workspace plugin/tool/skill states."""
+        preserving or restoring per-workspace model/effort/plugin/tool/skill states."""
         ws_state = _load_workspace_state(self.workspace)
+        global_defaults = _load_workspace_state("__defaults__")
         self._ws_ui_state = dict(ws_state.get("ui") or {})
         plugins_cfg = self.settings.setdefault("plugins", {})
         if isinstance(ws_state.get("plugins_enabled"), list):
@@ -467,8 +468,30 @@ class Connection:
                 list(self._base_plugins_enabled) if self._base_plugins_enabled is not None else None
             )
 
-        ns = SimpleNamespace(profile=None, provider=None, model=self.model, base_url=None,
-                             api_key=None, mode=self.mode, effort=self.effort, max_turns=None, no_stream=False)
+        saved_model = ws_state.get("model")
+        if isinstance(saved_model, str) and saved_model.strip():
+            resolved_model: str | None = saved_model.strip()
+        elif self.model:
+            resolved_model = self.model
+        elif isinstance(global_defaults.get("model"), str) and global_defaults["model"].strip():
+            resolved_model = global_defaults["model"].strip()
+        else:
+            resolved_model = None
+
+        valid_efforts = ("auto", "off", "low", "medium", "high")
+        saved_effort = str(ws_state.get("reasoning_effort") or "").strip().lower()
+        default_effort = str(global_defaults.get("reasoning_effort") or "").strip().lower()
+        if saved_effort in valid_efforts:
+            resolved_effort = saved_effort
+        elif self.effort in valid_efforts:
+            resolved_effort = self.effort
+        elif default_effort in valid_efforts:
+            resolved_effort = default_effort
+        else:
+            resolved_effort = "auto"
+
+        ns = SimpleNamespace(profile=None, provider=None, model=resolved_model, base_url=None,
+                             api_key=None, mode=self.mode, effort=resolved_effort, max_turns=None, no_stream=False)
         config = _build_config(ns, self.settings)
         # Remember the resolved default so the model dropdown can show it.
         self.model = config.model
@@ -983,16 +1006,21 @@ class Connection:
         if eff in ("auto", "off", "low", "medium", "high"):
             self.effort = eff
             self.agent.config.reasoning_effort = eff
+            _save_workspace_state(self.workspace, {"reasoning_effort": eff})
+            _save_workspace_state("__defaults__", {"reasoning_effort": eff})
             self.send({"type": "profile", **self._profile_data()})
             self.send({"type": "cockpit", **self._cockpit_snapshot()})
 
     def _set_model(self, model: str) -> None:
         """Switch just the model. With a proxy the base_url/api_key are unchanged and
         the model name is passed per request, so no client rebuild is needed."""
+        model = (model or "").strip()
         if not model:
             return
         self.model = model
         self.agent.config.model = model
+        _save_workspace_state(self.workspace, {"model": model})
+        _save_workspace_state("__defaults__", {"model": model})
         snap = self._catalog_snapshot()
         self._apply_catalog_metadata(snap)
         self._refresh_system_prompt()
@@ -1169,6 +1197,8 @@ class Connection:
         if target_model:
             cfg.model = target_model
             self.model = target_model
+            _save_workspace_state(self.workspace, {"model": target_model})
+            _save_workspace_state("__defaults__", {"model": target_model})
         cfg.base_url = prof.get("base_url") or None
         cfg.api_key = prof.get("api_key") or None
         if prof.get("context_window"):
@@ -1213,6 +1243,8 @@ def _workspace_states_file() -> Path:
 
 
 def _workspace_state_key(workspace: str) -> str:
+    if workspace == "__defaults__":
+        return "__defaults__"
     try:
         norm = str(Path(workspace).resolve())
     except OSError:
@@ -1324,24 +1356,137 @@ def _image_block(path: str) -> dict[str, Any] | None:
     }}
 
 
+def _stringify_tool_result_content(content: Any) -> str:
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text":
+                parts.append(str(item.get("text") or ""))
+            elif isinstance(item, str):
+                parts.append(item)
+            else:
+                parts.append(json.dumps(item, ensure_ascii=False))
+        return "\n".join(p for p in parts if p)
+    return str(content)
+
+
 def _transcript(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Flatten stored context messages into {role, text, tools} for re-rendering."""
-    out: list[dict[str, Any]] = []
+    """Group stored context messages into UI turns with chronological `steps`
+    (thinking, intermediate notes, tool calls + outputs) and final `text`."""
+    tool_results: dict[str, dict[str, Any]] = {}
     for m in messages:
         content = m.get("content")
-        if isinstance(content, str):
-            out.append({"role": m["role"], "text": content, "tools": []})
+        if not isinstance(content, list):
             continue
-        text_parts, tools = [], []
-        for block in content or []:
-            if not isinstance(block, dict):
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "tool_result":
+                tid = str(block.get("tool_use_id") or "")
+                if tid:
+                    tool_results[tid] = {
+                        "output": _stringify_tool_result_content(block.get("content")),
+                        "is_error": bool(block.get("is_error")),
+                    }
+
+    out: list[dict[str, Any]] = []
+    active_assistant: dict[str, Any] | None = None
+
+    for m in messages:
+        role = m.get("role")
+        content = m.get("content")
+
+        if role == "user":
+            if isinstance(content, str):
+                active_assistant = None
+                out.append({"role": "user", "text": content, "tools": [], "steps": []})
                 continue
-            if block.get("type") == "text":
-                text_parts.append(block.get("text", ""))
-            elif block.get("type") == "tool_use":
-                tools.append(block.get("name", "?"))
-        if text_parts or tools:
-            out.append({"role": m["role"], "text": "".join(text_parts), "tools": tools})
+            text_parts: list[str] = []
+            has_tool_result = False
+            for block in content or []:
+                if not isinstance(block, dict):
+                    continue
+                btype = block.get("type")
+                if btype == "tool_result":
+                    has_tool_result = True
+                elif btype == "text" and block.get("text"):
+                    text_parts.append(str(block.get("text")))
+            if text_parts:
+                active_assistant = None
+                out.append({"role": "user", "text": "".join(text_parts), "tools": [], "steps": []})
+            elif not has_tool_result:
+                active_assistant = None
+            continue
+
+        if role == "assistant":
+            if isinstance(content, str):
+                if active_assistant is None:
+                    active_assistant = {"role": "assistant", "text": content, "tools": [], "steps": []}
+                    out.append(active_assistant)
+                else:
+                    if active_assistant["text"].strip():
+                        active_assistant["steps"].append({"type": "note", "text": active_assistant["text"]})
+                    active_assistant["text"] = content
+                continue
+
+            think_parts: list[str] = []
+            text_parts = []
+            tool_calls: list[dict[str, Any]] = []
+            for block in content or []:
+                if not isinstance(block, dict):
+                    continue
+                btype = block.get("type")
+                if btype in ("thinking", "reasoning"):
+                    t = str(block.get("thinking") or block.get("reasoning") or block.get("text") or "")
+                    if t.strip():
+                        think_parts.append(t)
+                elif btype == "text":
+                    t = str(block.get("text") or "")
+                    if t:
+                        text_parts.append(t)
+                elif btype == "tool_use":
+                    tid = str(block.get("id") or "")
+                    name = str(block.get("name") or "?")
+                    res = tool_results.get(tid) or {}
+                    tool_calls.append({
+                        "type": "tool",
+                        "name": name,
+                        "input": block.get("input") if isinstance(block.get("input"), dict) else {},
+                        "output": res.get("output", ""),
+                        "is_error": bool(res.get("is_error", False)),
+                    })
+
+            if not (think_parts or text_parts or tool_calls):
+                continue
+
+            if active_assistant is None:
+                active_assistant = {"role": "assistant", "text": "", "tools": [], "steps": []}
+                out.append(active_assistant)
+            elif active_assistant["text"].strip():
+                active_assistant["steps"].append({"type": "note", "text": active_assistant["text"]})
+                active_assistant["text"] = ""
+
+            for t in think_parts:
+                active_assistant["steps"].append({"type": "thinking", "text": t})
+
+            joined_text = "".join(text_parts)
+            if tool_calls:
+                if joined_text.strip():
+                    active_assistant["steps"].append({"type": "note", "text": joined_text})
+                for tc in tool_calls:
+                    active_assistant["steps"].append(tc)
+                    active_assistant["tools"].append(tc["name"])
+            else:
+                active_assistant["text"] = joined_text
+            continue
+
+        # Any other role: preserve text safely
+        active_assistant = None
+        if isinstance(content, str):
+            out.append({"role": role or "assistant", "text": content, "tools": [], "steps": []})
+
     return out
 
 
@@ -1624,6 +1769,10 @@ def create_app(
         settings.clear()
         settings.update(fresh)
         app.state.settings = settings
+
+        if model:
+            _save_workspace_state(os.getcwd(), {"model": model})
+            _save_workspace_state("__defaults__", {"model": model})
 
         for conn in list(connections):
             conn.reload_settings(settings, force_model=model)
