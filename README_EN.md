@@ -11,8 +11,8 @@
 </p>
 
 <p>
-  <img src="https://img.shields.io/static/v1?label=Version&message=v0.1.0&color=10b981&style=flat-square" alt="Version" />
-  <img src="https://img.shields.io/static/v1?label=Tests&message=354+passed&color=22c55e&style=flat-square" alt="Tests" />
+  <img src="https://img.shields.io/static/v1?label=Version&message=v0.1.1&color=10b981&style=flat-square" alt="Version" />
+  <img src="https://img.shields.io/static/v1?label=Tests&message=356+passed&color=22c55e&style=flat-square" alt="Tests" />
   <img src="https://img.shields.io/static/v1?label=License&message=MIT&color=2563eb&style=flat-square" alt="License" />
   <img src="https://img.shields.io/static/v1?label=Python&message=3.10%2B&color=0f172a&style=flat-square" alt="Python" />
   <img src="https://img.shields.io/static/v1?label=UI&message=CLI+%7C+Web+%7C+Desktop&color=0284c7&style=flat-square" alt="UI" />
@@ -42,9 +42,9 @@
 ## Preview
 
 <div align="center">
-  <img src="./docs/ui-preview.svg" alt="codelet Web Workbench Preview" width="760" />
+  <img src="./docs/ui.png" alt="codelet Desktop &amp; Web Workbench Preview" width="880" />
   <br />
-  <sub><strong>Resizable 3-Pane Workbench · Conversations &amp; 2-Layer Capabilities · Streaming Chat &amp; Diff Approval · Cockpit / Side /btw / Tasks / Changes</strong></sub>
+  <sub><strong>Resizable 3-Pane Workbench &amp; Windows Desktop App · Conversations &amp; 2-Layer Capabilities · Streaming Chat &amp; Unified Composer · Cockpit / Side /btw / Tasks / Changes</strong></sub>
 </div>
 
 ## Key Features
