@@ -903,6 +903,17 @@ details.nav[open] > summary .chev { transform: rotate(180deg); }
 .st-switch-lbl { display: inline-flex; align-items: center; gap: 7px; padding: 6px 11px; border-radius: 999px;
   border: 1px solid var(--border); background: var(--panel-2); font-size: 12.8px; font-weight: 600; cursor: pointer; flex: none; }
 .st-switch-lbl input { accent-color: var(--accent); width: 15px; height: 15px; margin: 0; }
+.toggle-switch { position: relative; display: inline-flex; align-items: center; cursor: pointer; flex: none; user-select: none; }
+.toggle-switch input { position: absolute; opacity: 0; width: 0; height: 0; pointer-events: none; }
+.toggle-track { position: relative; width: 42px; height: 24px; border-radius: 999px;
+  background: color-mix(in srgb, var(--border-strong) 85%, var(--panel-2));
+  transition: background .18s ease, box-shadow .18s ease; }
+.toggle-track::after { content: ""; position: absolute; top: 2px; left: 2px; width: 20px; height: 20px;
+  border-radius: 50%; background: #ffffff; box-shadow: 0 1px 3px rgba(0,0,0,.22);
+  transition: transform .18s cubic-bezier(.4, 0, .2, 1); }
+.toggle-switch input:checked + .toggle-track { background: #007aff; }
+.toggle-switch input:checked + .toggle-track::after { transform: translateX(18px); }
+.toggle-switch input:focus-visible + .toggle-track { box-shadow: 0 0 0 3px color-mix(in srgb, #007aff 28%, transparent); }
 .st-pl-form { display: flex; flex-direction: column; gap: 12px; }
 .st-pl-field { border: 1px solid var(--border); border-radius: 10px; padding: 11px 13px; background: color-mix(in srgb, var(--panel-2) 30%, var(--panel));
   display: flex; flex-direction: column; gap: 6px; }
@@ -912,6 +923,24 @@ details.nav[open] > summary .chev { transform: rotate(180deg); }
 .st-pl-json { width: 100%; min-height: 128px; resize: vertical; font-family: var(--mono); font-size: 12.6px; line-height: 1.5;
   background: var(--panel-2); border: 1px solid var(--border); border-radius: 9px; padding: 9px 11px; color: var(--text); outline: none; }
 .st-pl-json:focus { border-color: var(--accent); background: var(--panel); }
+
+/* About tab inside Settings Center */
+.st-about-hero { border: 1px solid var(--border); border-radius: 14px; padding: 18px 20px; margin-bottom: 14px;
+  background: color-mix(in srgb, var(--panel-2) 38%, var(--panel)); display: flex; align-items: flex-start; gap: 16px; }
+.st-about-logo { width: 46px; height: 46px; border-radius: 13px; background: var(--accent-weak); color: var(--accent);
+  display: grid; place-items: center; font-size: 24px; line-height: 1; flex: none;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border)); }
+.st-about-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.st-about-title-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.st-about-name { font-size: 19px; font-weight: 700; letter-spacing: -.01em; color: var(--text); }
+.st-ver-pill { font-size: 12px; font-weight: 600; padding: 2px 9px; border-radius: 999px;
+  background: var(--accent-weak); color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--border)); }
+.st-about-sub { margin: 0; font-size: 13px; color: var(--muted); line-height: 1.5; }
+.st-about-acts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+.st-about-kv { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 5px 0; font-size: 13.2px; color: var(--muted); border-bottom: 1px dashed var(--border); }
+.st-about-kv:last-child { border-bottom: 0; padding-bottom: 0; }
+.st-about-kv span:last-child { color: var(--text); font-weight: 500; }
 
 @media (max-width: 700px) {
   .settings-center { flex-direction: column; height: 90vh; }

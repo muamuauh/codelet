@@ -36,6 +36,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from rich.console import Console
 
+from .. import __version__
 from ..agent_loop import AgentLoop
 from ..cli import _build_config
 from ..config import Config, LLMProvider, PermissionMode
@@ -1672,6 +1673,7 @@ def create_app(
     def api_health() -> dict[str, Any]:
         return {
             "ok": True,
+            "version": __version__,
             "pid": os.getpid(),
             "cwd": os.getcwd(),
             "desktop": bool(token),
@@ -1758,7 +1760,10 @@ def create_app(
             }
         cb_raw = str(settings.get("close_behavior") or "ask").strip().lower()
         close_behavior = cb_raw if cb_raw in ("ask", "tray", "quit") else "ask"
+        lang_raw = str(settings.get("language") or "zh").strip().lower()
+        language = lang_raw if lang_raw in ("zh", "en") else "zh"
         general_view = {
+            "language": language,
             "close_behavior": close_behavior,
             "max_turns": int(settings.get("max_turns") or c.max_turns),
             "max_tokens": int(settings.get("max_tokens") or c.max_tokens),
@@ -1773,6 +1778,7 @@ def create_app(
             "models_cache_ttl": int(resolve_ttl_seconds(settings)),
         }
         return {
+            "version": __version__,
             "active_profile": active_name,
             "provider": c.provider.value,
             "base_url": c.base_url or "",
@@ -1835,6 +1841,11 @@ def create_app(
             if cb_val not in ("ask", "tray", "quit"):
                 return JSONResponse({"ok": False, "error": f"Invalid close_behavior: {cb_val}"}, status_code=400)
             user_raw["close_behavior"] = cb_val
+        if "language" in body and body["language"] not in (None, ""):
+            lang_val = str(body["language"]).strip().lower()
+            if lang_val not in ("zh", "en"):
+                return JSONResponse({"ok": False, "error": f"Invalid language: {lang_val}"}, status_code=400)
+            user_raw["language"] = lang_val
 
         _write_user_settings_raw(user_raw)
         fresh = load_settings(user_path=_user_settings_file())

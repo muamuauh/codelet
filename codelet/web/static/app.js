@@ -28,19 +28,305 @@ const MODE_ICONS = {
   plan: '<svg class="ic" viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>',
   auto: '<svg class="ic" viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>',
 };
-const MODE_DESC = {
-  normal: "标准协同：写文件前预览 Diff 确认，白名单常用开发命令自动放行。",
-  ask: "步步确认：写文件预览 Diff 且所有非只读终端命令均弹窗确认。",
-  plan: "只读规划：仅允许只读分析与规划，所有写入类工具硬拦截。",
-  auto: "全自动执行：写文件与常规命令免确认直接执行（仍受高危红线保护）。",
+const MODE_DESC_I18N = {
+  zh: {
+    normal: "标准协同：写文件前预览 Diff 确认，白名单常用开发命令自动放行。",
+    ask: "步步确认：写文件预览 Diff 且所有非只读终端命令均弹窗确认。",
+    plan: "只读规划：仅允许只读分析与规划，所有写入类工具硬拦截。",
+    auto: "全自动执行：写文件与常规命令免确认直接执行（仍受高危红线保护）。",
+  },
+  en: {
+    normal: "Standard: preview diffs before edits; safe dev commands auto-approved.",
+    ask: "Ask every time: confirm all file edits and non-read-only commands.",
+    plan: "Read-only planning: analysis & planning only; all write tools blocked.",
+    auto: "Auto-execute: auto-approve edits and routine commands (danger guard stays on).",
+  },
 };
-const EFFORT_DESC = {
-  auto: "跟随当前模型默认思考策略",
-  off: "关闭思考链（最低延迟与成本）",
-  low: "轻度思考，适合简单修改与问答",
-  medium: "中度思考，平衡推理质量与速度",
-  high: "深度思考，适合架构设计与疑难排查",
+const EFFORT_DESC_I18N = {
+  zh: {
+    auto: "跟随当前模型默认思考策略",
+    off: "关闭思考链（最低延迟与成本）",
+    low: "轻度思考，适合简单修改与问答",
+    medium: "中度思考，平衡推理质量与速度",
+    high: "深度思考，适合架构设计与疑难排查",
+  },
+  en: {
+    auto: "Follow the model's default reasoning policy",
+    off: "Disable reasoning chain (lowest latency & cost)",
+    low: "Light reasoning for quick edits & Q&A",
+    medium: "Balanced reasoning quality and speed",
+    high: "Deep reasoning for architecture & tricky debugging",
+  },
 };
+const MODE_DESC = { ...MODE_DESC_I18N.zh };
+const EFFORT_DESC = { ...EFFORT_DESC_I18N.zh };
+
+let currentLang = "zh";
+const I18N = {
+  zh: {
+    "side.new_chat": "新建对话",
+    "side.conversations": "对话",
+    "side.plugins_packs": "插件扩展",
+    "side.plugins": "插件",
+    "side.base_caps": "基础能力",
+    "side.tools": "工具",
+    "side.skills": "技能",
+    "top.commands": "命令",
+    "empty.sub": "向 codelet 提问代码架构或让它动手修改 — 用 /btw 发起侧栏旁枝提问，按 Ctrl+K 打开快捷指令面板。",
+    "starter.1.label": "梳理项目架构",
+    "starter.1.prompt": "帮我梳理当前工作区的整体目录结构与核心模块职责",
+    "starter.2.label": "检查 TODO 与隐患",
+    "starter.2.prompt": "找出当前项目中的 TODO 注释和潜在的代码隐患，按优先级列出",
+    "starter.3.label": "运行测试并汇报",
+    "starter.3.prompt": "运行当前项目的测试套，并汇报结果与任何失败原因",
+    "composer.ph": "给 codelet 发消息…  (/ 指令 · /btw 侧栏提问 · 支持粘贴或拖入图片)",
+    "ck.ctx_title": "上下文窗口",
+    "ck.cur_win": "当前窗口",
+    "ck.cache_hit": "缓存命中率",
+    "ck.turn_in": "本轮新输入",
+    "ck.turn_out": "本轮输出",
+    "ck.tot_in": "累计新入",
+    "ck.tot_cache": "缓存读",
+    "ck.tot_out": "累计输出",
+    "ck.tot_calls": "调用/工具",
+    "ck.mode_title": "执行模式控制",
+    "ck.perf_title": "延迟与生成速度",
+    "ck.lat_latest": "最近耗时",
+    "ck.spd_latest": "最近速度",
+    "ck.lat_avg": "平均 / P95",
+    "ck.spd_avg": "均值 / 峰值",
+    "ck.trend_title": "近 24 轮趋势",
+    "ck.tab_speed": "速度",
+    "ck.tab_latency": "耗时",
+    "ck.tab_context": "上下文",
+    "ck.spend_title": "按量花费与用量",
+    "ck.today_spend": "今日花费",
+    "ck.week_spend": "近 7 天花费",
+    "ck.daily_spend": "近 7 天每日消耗",
+    "ck.model_dist": "近 7 天模型分布",
+    "btw.include_ctx": "参考主对话背景",
+    "btw.clear": "清空",
+    "btw.empty_title": "/btw 独立侧栏提问",
+    "btw.empty_desc": "随时顺嘴问旁枝问题，绝不污染主对话上下文；即使主任务正在运行中也可以并发提问。",
+    "btw.ph": "顺便问一句… (Enter 发送 · Shift+Enter 换行)",
+    "st.title": "设置",
+    "st.nav.general": "通用",
+    "st.nav.models": "模型与接口",
+    "st.nav.plugins": "插件",
+    "st.nav.about": "关于",
+    "st.gen.appearance": "外观与窗口行为",
+    "st.gen.theme": "主题外观",
+    "st.gen.theme_desc": "切换浅色、深色或跟随操作系统",
+    "st.gen.theme_sys": "跟随系统",
+    "st.gen.theme_light": "浅色 (Light)",
+    "st.gen.theme_dark": "深色 (Dark)",
+    "st.gen.lang": "语言 (Language)",
+    "st.gen.lang_desc": "切换界面显示语言（立即生效）",
+    "st.gen.close": "关闭主窗口时",
+    "st.gen.close_desc": "桌面端点击右上角 × 关闭按钮时的行为（最小化到托盘或直接退出）",
+    "st.gen.close_ask": "每次询问（推荐）",
+    "st.gen.close_tray": "最小化到系统托盘",
+    "st.gen.close_quit": "直接退出应用",
+    "st.gen.agent_sec": "Agent 与上下文运行参数",
+    "st.gen.max_turns": "单轮最大工具步数 (max_turns)",
+    "st.gen.max_tokens": "单次最大输出 Token (max_tokens)",
+    "st.gen.ctx_win": "默认上下文窗口 (context_window)",
+    "st.gen.compact_ratio": "自动压缩阈值比例 (0.30 ~ 0.95)",
+    "st.gen.keep_recent": "压缩保留最近消息数 (compact_keep_recent)",
+    "st.gen.cache_ttl": "模型目录缓存时间（秒）",
+    "st.gen.auto_refresh": "启动及缓存过期后自动从接口拉取模型列表 (models_auto_refresh)",
+    "st.gen.app_sec": "应用与服务",
+    "st.gen.quit_app": "停止服务 / 退出应用",
+    "st.gen.save": "保存通用设置",
+    "st.mod.intro": "填入各提供商的 API 密钥即可使用其模型。",
+    "st.mod.tab_builtin": "第三方模型提供商",
+    "st.mod.tab_custom": "自定义模型 API",
+    "st.mod.provider": "提供商",
+    "st.mod.api_key": "API 密钥",
+    "st.mod.show": "显示",
+    "st.mod.hide": "隐藏",
+    "st.mod.clear": "清除",
+    "st.mod.advanced": "自定义设置",
+    "st.mod.profile_name": "配置名称",
+    "st.mod.protocol": "接口协议",
+    "st.mod.proto_openai": "OpenAI 兼容（含各大中转站 / DeepSeek / Ollama）",
+    "st.mod.proto_anthropic": "Anthropic 原生（Claude API）",
+    "st.mod.default_model": "默认模型",
+    "st.mod.key_env": "密钥环境变量名",
+    "st.mod.catalog": "模型目录",
+    "st.mod.fetch": "从接口拉取",
+    "st.mod.discover": "AI 读文档发现",
+    "st.mod.col_id": "API 模型 ID",
+    "st.mod.col_name": "显示名称",
+    "st.mod.add_model": "+ 添加模型",
+    "st.mod.test": "测试连接",
+    "st.mod.delete": "删除",
+    "st.mod.add_provider": "+ 添加模型提供商",
+    "st.pl.back": "← 全部插件",
+    "st.pl.reset": "恢复默认",
+    "st.pl.save": "保存插件设置",
+    "st.about.sub": "本地 AI 编程工作台 · 支持 CLI / Web / Windows 桌面端",
+    "st.about.check_update": "检查更新",
+    "st.about.releases": "更新日志",
+    "st.about.repo": "GitHub 仓库",
+    "st.about.info_sec": "应用信息",
+    "st.about.version": "当前版本",
+    "st.about.runtime": "运行模式",
+    "st.about.config_file": "配置文件",
+    "st.about.license": "开源协议",
+    "common.cancel": "取消",
+    "common.save": "保存",
+  },
+  en: {
+    "side.new_chat": "New chat",
+    "side.conversations": "Conversations",
+    "side.plugins_packs": "Plugins · Packs",
+    "side.plugins": "Plugins",
+    "side.base_caps": "Base Capabilities",
+    "side.tools": "Tools",
+    "side.skills": "Skills",
+    "top.commands": "Commands",
+    "empty.sub": "Ask about the code, or tell codelet what to build — use /btw for side questions or Ctrl+K for quick actions.",
+    "starter.1.label": "Map project architecture",
+    "starter.1.prompt": "Summarize the directory structure and core module responsibilities of this workspace",
+    "starter.2.label": "Audit TODOs & risks",
+    "starter.2.prompt": "Find TODO comments and potential code risks in this repository, ranked by priority",
+    "starter.3.label": "Run test suite",
+    "starter.3.prompt": "Run this project's test suite and summarize the results and any failures",
+    "composer.ph": "Message codelet…  (/ commands · /btw side ask · Paste or drop images)",
+    "ck.ctx_title": "Context Window",
+    "ck.cur_win": "Current Window",
+    "ck.cache_hit": "Cache Hit Rate",
+    "ck.turn_in": "Turn Input",
+    "ck.turn_out": "Turn Output",
+    "ck.tot_in": "Total Input",
+    "ck.tot_cache": "Cache Read",
+    "ck.tot_out": "Total Output",
+    "ck.tot_calls": "Calls / Tools",
+    "ck.mode_title": "Execution Mode",
+    "ck.perf_title": "Latency & Speed",
+    "ck.lat_latest": "Latest Latency",
+    "ck.spd_latest": "Latest Speed",
+    "ck.lat_avg": "Avg / P95",
+    "ck.spd_avg": "Avg / Peak",
+    "ck.trend_title": "Last 24 Turns Trend",
+    "ck.tab_speed": "Speed",
+    "ck.tab_latency": "Latency",
+    "ck.tab_context": "Context",
+    "ck.spend_title": "Usage & Spend",
+    "ck.today_spend": "Today",
+    "ck.week_spend": "Last 7 Days",
+    "ck.daily_spend": "Daily Spend (7d)",
+    "ck.model_dist": "Models (7d)",
+    "btw.include_ctx": "Include main chat context",
+    "btw.clear": "Clear",
+    "btw.empty_title": "/btw Isolated Side Chat",
+    "btw.empty_desc": "Ask side questions anytime without polluting the main conversation — even while a task is running.",
+    "btw.ph": "Ask a side question… (Enter to send · Shift+Enter for newline)",
+    "st.title": "Settings",
+    "st.nav.general": "General",
+    "st.nav.models": "Models & API",
+    "st.nav.plugins": "Plugins",
+    "st.nav.about": "About",
+    "st.gen.appearance": "Appearance & Window",
+    "st.gen.theme": "Theme",
+    "st.gen.theme_desc": "Switch between light, dark, or system default",
+    "st.gen.theme_sys": "System",
+    "st.gen.theme_light": "Light",
+    "st.gen.theme_dark": "Dark",
+    "st.gen.lang": "Language",
+    "st.gen.lang_desc": "Switch interface display language (applies immediately)",
+    "st.gen.close": "When closing window",
+    "st.gen.close_desc": "Action when clicking the desktop window × button (minimize to tray or quit)",
+    "st.gen.close_ask": "Ask every time (Recommended)",
+    "st.gen.close_tray": "Minimize to system tray",
+    "st.gen.close_quit": "Quit immediately",
+    "st.gen.agent_sec": "Agent & Context Parameters",
+    "st.gen.max_turns": "Max tool steps per turn (max_turns)",
+    "st.gen.max_tokens": "Max output tokens (max_tokens)",
+    "st.gen.ctx_win": "Default context window (context_window)",
+    "st.gen.compact_ratio": "Auto-compact threshold (0.30 ~ 0.95)",
+    "st.gen.keep_recent": "Keep recent messages on compact (compact_keep_recent)",
+    "st.gen.cache_ttl": "Model catalog cache TTL (seconds)",
+    "st.gen.auto_refresh": "Auto-refresh model list on startup and cache expiry (models_auto_refresh)",
+    "st.gen.app_sec": "Application & Service",
+    "st.gen.quit_app": "Stop Server / Quit App",
+    "st.gen.save": "Save General Settings",
+    "st.mod.intro": "Enter API keys for each provider to use their models.",
+    "st.mod.tab_builtin": "Built-in Providers",
+    "st.mod.tab_custom": "Custom Model API",
+    "st.mod.provider": "Provider",
+    "st.mod.api_key": "API Key",
+    "st.mod.show": "Show",
+    "st.mod.hide": "Hide",
+    "st.mod.clear": "Clear",
+    "st.mod.advanced": "Custom Settings",
+    "st.mod.profile_name": "Profile Name",
+    "st.mod.protocol": "API Protocol",
+    "st.mod.proto_openai": "OpenAI-compatible (relays / DeepSeek / Ollama)",
+    "st.mod.proto_anthropic": "Anthropic Native (Claude API)",
+    "st.mod.default_model": "Default Model",
+    "st.mod.key_env": "API Key Env Var",
+    "st.mod.catalog": "Model Directory",
+    "st.mod.fetch": "Fetch /models",
+    "st.mod.discover": "AI Discover Docs",
+    "st.mod.col_id": "API Model ID",
+    "st.mod.col_name": "Display Name",
+    "st.mod.add_model": "+ Add Model",
+    "st.mod.test": "Test Connection",
+    "st.mod.delete": "Delete",
+    "st.mod.add_provider": "+ Add Model Provider",
+    "st.pl.back": "← All Plugins",
+    "st.pl.reset": "Reset Defaults",
+    "st.pl.save": "Save Plugin Settings",
+    "st.about.sub": "Local AI Coding Workbench · CLI / Web / Windows Desktop",
+    "st.about.check_update": "Check for Updates",
+    "st.about.releases": "Release Notes",
+    "st.about.repo": "GitHub Repository",
+    "st.about.info_sec": "Application Info",
+    "st.about.version": "Version",
+    "st.about.runtime": "Runtime",
+    "st.about.config_file": "Config File",
+    "st.about.license": "License",
+    "common.cancel": "Cancel",
+    "common.save": "Save",
+  },
+};
+
+function t(key) {
+  return (I18N[currentLang] && I18N[currentLang][key]) || (I18N.zh && I18N.zh[key]) || key;
+}
+
+function applyLanguage(lang) {
+  currentLang = lang === "en" ? "en" : "zh";
+  document.documentElement.lang = currentLang === "en" ? "en" : "zh-CN";
+  Object.assign(MODE_DESC, MODE_DESC_I18N[currentLang]);
+  Object.assign(EFFORT_DESC, EFFORT_DESC_I18N[currentLang]);
+
+  document.querySelectorAll("[data-i18n]").forEach((node) => {
+    const key = node.getAttribute("data-i18n");
+    if (key) node.textContent = t(key);
+  });
+  document.querySelectorAll("[data-i18n-ph]").forEach((node) => {
+    const key = node.getAttribute("data-i18n-ph");
+    if (key) node.placeholder = t(key);
+  });
+  document.querySelectorAll("[data-i18n-prompt]").forEach((node) => {
+    const key = node.getAttribute("data-i18n-prompt");
+    if (key) node.dataset.prompt = t(key);
+  });
+
+  const langSel = $("st-gen-lang");
+  if (langSel) langSel.value = currentLang;
+  if (typeof updateModeUI === "function" && activeMode) updateModeUI(activeMode);
+  if (typeof updateEffortUI === "function" && activeEffort) updateEffortUI(activeEffort);
+  if ($("settings-modal") && !$("settings-modal").classList.contains("hidden")) {
+    updateSettingsPaneTitle();
+    if (activeSettingsTab === "models") renderSettingsProfiles();
+    else if (activeSettingsTab === "plugins" && !activeSettingsPlugin) renderSettingsPluginsOverview();
+    else if (activeSettingsTab === "about") populateAboutSection();
+  }
+}
 
 // ---------- helpers ----------
 function el(tag, cls, text) {
@@ -2406,14 +2692,18 @@ function renderSettingsPluginsOverview() {
     if (p.description) main.appendChild(el("div", "st-pl-card-desc", p.description));
 
     const acts = el("div", "st-pl-card-acts");
-    const sw = el("label", "st-switch-lbl");
+    const sw = el("label", "toggle-switch");
+    sw.title = p.enabled
+      ? (currentLang === "en" ? "Enabled — click to disable" : "已启用 — 点击关闭")
+      : (currentLang === "en" ? "Disabled — click to enable" : "已关闭 — 点击启用");
     const cb = document.createElement("input");
     cb.type = "checkbox";
     cb.checked = !!p.enabled;
+    cb.setAttribute("aria-label", `Toggle ${p.name}`);
     cb.addEventListener("change", () => send({ type: "set_plugin_enabled", name: p.name, enabled: cb.checked }));
     sw.appendChild(cb);
-    sw.appendChild(el("span", null, p.enabled ? "启用" : "关闭"));
-    const cfgBtn = el("button", "btn ghost sm", "设置 →");
+    sw.appendChild(el("span", "toggle-track"));
+    const cfgBtn = el("button", "btn ghost sm", currentLang === "en" ? "Configure →" : "设置 →");
     cfgBtn.type = "button";
     cfgBtn.addEventListener("click", () => switchSettingsTab("plugins", p.name));
     acts.appendChild(sw);
@@ -2446,9 +2736,7 @@ function openPluginSettingsDetail(name) {
   renderPluginDetailChips(p);
 
   const cb = $("st-pl-denable");
-  const txt = $("st-pl-denable-txt");
-  cb.checked = !!p.enabled;
-  txt.textContent = p.enabled ? "已启用" : "未启用";
+  if (cb) cb.checked = !!p.enabled;
 
   const form = $("st-pl-form");
   form.innerHTML = "";
@@ -2466,15 +2754,15 @@ function openPluginSettingsDetail(name) {
         const row = el("label", "st-pl-field-row");
         row.style.cursor = "pointer";
         row.appendChild(el("span", "st-pl-field-lbl", field.label || key));
+        const sw = el("span", "toggle-switch");
         const inp = document.createElement("input");
         inp.type = "checkbox";
         inp.checked = Boolean(val);
         inp.dataset.plKey = key;
         inp.dataset.plType = "boolean";
-        inp.style.accentColor = "var(--accent)";
-        inp.style.width = "16px";
-        inp.style.height = "16px";
-        row.appendChild(inp);
+        sw.appendChild(inp);
+        sw.appendChild(el("span", "toggle-track"));
+        row.appendChild(sw);
         wrap.appendChild(row);
       } else {
         const lbl = el("label", "st-pl-field-lbl", field.label || key);
@@ -2600,10 +2888,17 @@ function collectPluginSettingsForm(plugin) {
   return { config: out };
 }
 
+function setAboutFeedback(msg, kind = "") { setBoxFeedback("st-about-feedback", msg, kind); }
+
 function populateGeneralSettings(gen) {
   const g = gen || {};
   const savedTheme = (() => { try { return localStorage.getItem("codelet_theme"); } catch (_) { return null; } })();
   if ($("st-gen-theme")) $("st-gen-theme").value = (savedTheme === "dark" || savedTheme === "light") ? savedTheme : "system";
+  if (g.language && (g.language === "zh" || g.language === "en")) {
+    try { localStorage.setItem("codelet_lang", g.language); } catch (_) {}
+    if (g.language !== currentLang) applyLanguage(g.language);
+  }
+  if ($("st-gen-lang")) $("st-gen-lang").value = currentLang;
   if ($("st-gen-close") && g.close_behavior) $("st-gen-close").value = g.close_behavior;
   if ($("st-gen-max-turns")) $("st-gen-max-turns").value = g.max_turns ?? 30;
   if ($("st-gen-max-tokens")) $("st-gen-max-tokens").value = g.max_tokens ?? 8192;
@@ -2615,8 +2910,33 @@ function populateGeneralSettings(gen) {
   setGeneralFeedback("");
 }
 
+let cachedDesktopVersion = null;
+function populateAboutSection() {
+  const rawVer = cachedDesktopVersion || (settingsState && settingsState.version) || "0.1.3";
+  const verLabel = rawVer.startsWith("v") ? rawVer : "v" + rawVer;
+  if ($("st-about-ver")) $("st-about-ver").textContent = verLabel;
+  if ($("st-about-ver-row")) $("st-about-ver-row").textContent = verLabel;
+  const api = desktopApi();
+  if ($("st-about-mode")) {
+    $("st-about-mode").textContent = api
+      ? (currentLang === "en" ? "Desktop (Electron)" : "桌面端 (Electron)")
+      : (currentLang === "en" ? "Web Browser" : "浏览器模式 (Web)");
+  }
+  setAboutFeedback("");
+}
+
+function updateSettingsPaneTitle() {
+  const titles = {
+    general: t("st.nav.general"),
+    models: t("st.nav.models"),
+    plugins: activeSettingsPlugin ? `${t("st.nav.plugins")} · ${activeSettingsPlugin}` : t("st.nav.plugins"),
+    about: t("st.nav.about"),
+  };
+  if ($("st-pane-title")) $("st-pane-title").textContent = titles[activeSettingsTab] || t("st.title");
+}
+
 function switchSettingsTab(tab, pluginName = null) {
-  const target = (tab === "general" || tab === "models" || tab === "plugins") ? tab : "general";
+  const target = (tab === "general" || tab === "models" || tab === "plugins" || tab === "about") ? tab : "general";
   activeSettingsTab = target;
   activeSettingsPlugin = target === "plugins" ? (pluginName || null) : null;
 
@@ -2627,8 +2947,7 @@ function switchSettingsTab(tab, pluginName = null) {
     pane.classList.toggle("hidden", pane.dataset.stPane !== target);
   });
 
-  const titles = { general: "通用", models: "模型与接口", plugins: activeSettingsPlugin ? `插件 · ${activeSettingsPlugin}` : "插件" };
-  if ($("st-pane-title")) $("st-pane-title").textContent = titles[target] || "设置";
+  updateSettingsPaneTitle();
 
   if (target === "plugins") {
     if (activeSettingsPlugin) {
@@ -2638,6 +2957,8 @@ function switchSettingsTab(tab, pluginName = null) {
       $("st-pl-overview")?.classList.remove("hidden");
       renderSettingsPluginsOverview();
     }
+  } else if (target === "about") {
+    populateAboutSection();
   }
   renderSettingsPluginsNav();
   const scrollEl = document.querySelector(".st-main-scroll");
@@ -3016,16 +3337,18 @@ async function openSettingsModal(initialTab = null, pluginName = null) {
     }
   }
 
-  // Desktop-only action buttons (update check) & desktop closeBehavior sync
+  // Desktop closeBehavior & version sync
   let desktopClosePref = null;
-  if (api && typeof api.getDesktopPrefs === "function") {
-    $("st-check-updates")?.classList.remove("hidden");
-    try {
-      const prefs = await api.getDesktopPrefs();
-      if (prefs && prefs.closeBehavior) desktopClosePref = prefs.closeBehavior;
-    } catch (_) {}
-  } else {
-    $("st-check-updates")?.classList.add("hidden");
+  if (api) {
+    if (typeof api.getDesktopPrefs === "function") {
+      try {
+        const prefs = await api.getDesktopPrefs();
+        if (prefs && prefs.closeBehavior) desktopClosePref = prefs.closeBehavior;
+      } catch (_) {}
+    }
+    if (typeof api.getVersion === "function") {
+      try { cachedDesktopVersion = await api.getVersion(); } catch (_) {}
+    }
   }
 
   const data = await safe("/api/settings");
@@ -3034,6 +3357,7 @@ async function openSettingsModal(initialTab = null, pluginName = null) {
     if (Array.isArray(data.plugins)) livePluginsCache = data.plugins;
     closeProviderEditor();
     populateGeneralSettings(data.general);
+    populateAboutSection();
     if (desktopClosePref && $("st-gen-close")) {
       $("st-gen-close").value = desktopClosePref;
     }
@@ -3047,6 +3371,7 @@ async function openSettingsModal(initialTab = null, pluginName = null) {
       : (!data.api_key_configured ? "models" : (activeSettingsTab || "general"));
     switchSettingsTab(chosenTab, pluginName);
   } else {
+    populateAboutSection();
     if (desktopClosePref && $("st-gen-close")) $("st-gen-close").value = desktopClosePref;
     switchSettingsTab(typeof initialTab === "string" ? initialTab : (activeSettingsTab || "general"), pluginName);
   }
@@ -3070,6 +3395,23 @@ $("st-gen-theme")?.addEventListener("change", () => {
   applyTheme(val === "system" ? null : val);
 });
 
+$("st-gen-lang")?.addEventListener("change", async () => {
+  const val = $("st-gen-lang").value === "en" ? "en" : "zh";
+  try { localStorage.setItem("codelet_lang", val); } catch (_) {}
+  applyLanguage(val);
+  try {
+    const r = await (await fetch("/api/settings/general", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ language: val }),
+    })).json();
+    if (r && r.ok) {
+      settingsState = r;
+      setGeneralFeedback(val === "en" ? "✓ Language switched to English" : "✓ 已切换为简体中文", "ok");
+    }
+  } catch (_) {}
+});
+
 $("st-gen-close")?.addEventListener("change", async () => {
   const val = $("st-gen-close").value;
   try {
@@ -3084,31 +3426,58 @@ $("st-gen-close")?.addEventListener("change", async () => {
     })).json();
     if (r && r.ok) {
       settingsState = r;
-      setGeneralFeedback("✓ 已更新关闭主窗口行为（已写入通用设置）", "ok");
+      setGeneralFeedback(
+        currentLang === "en" ? "✓ Window close behavior updated" : "✓ 已更新关闭主窗口行为（已写入通用设置）",
+        "ok"
+      );
     } else {
       setGeneralFeedback("✕ " + ((r && r.error) || "保存失败"), "err");
     }
   } catch (err) {
-    setGeneralFeedback("更新失败: " + err.message, "err");
+    setGeneralFeedback((currentLang === "en" ? "Update failed: " : "更新失败: ") + err.message, "err");
   }
 });
 
-$("st-check-updates")?.addEventListener("click", () => {
+function openExternalUrl(url) {
   const api = desktopApi();
-  if (api && typeof api.checkForUpdates === "function") api.checkForUpdates();
+  if (api && typeof api.openExternal === "function") api.openExternal(url);
+  else window.open(url, "_blank", "noopener");
+}
+
+$("st-about-check-update")?.addEventListener("click", async () => {
+  const api = desktopApi();
+  if (api && typeof api.checkForUpdates === "function") {
+    setAboutFeedback(currentLang === "en" ? "Checking GitHub Releases for updates…" : "正在向 GitHub Releases 检查更新…");
+    try {
+      await api.checkForUpdates();
+    } catch (err) {
+      setAboutFeedback((currentLang === "en" ? "Update check failed: " : "检查更新失败: ") + err.message, "err");
+    }
+    return;
+  }
+  setAboutFeedback(
+    currentLang === "en"
+      ? "Browser mode cannot self-update — opening GitHub Releases page."
+      : "浏览器模式不支持自动安装更新，正在打开 GitHub Releases 页面查看最新版本。"
+  );
+  openExternalUrl("https://github.com/muamuauh/codelet/releases");
 });
+$("st-about-releases")?.addEventListener("click", () => openExternalUrl("https://github.com/muamuauh/codelet/releases"));
+$("st-about-repo")?.addEventListener("click", () => openExternalUrl("https://github.com/muamuauh/codelet"));
 
 $("st-gen-save")?.addEventListener("click", async () => {
   const btn = $("st-gen-save");
   btn.disabled = true;
-  setGeneralFeedback("正在保存通用设置…");
+  setGeneralFeedback(currentLang === "en" ? "Saving general settings…" : "正在保存通用设置…");
   try {
     const closeVal = $("st-gen-close") ? $("st-gen-close").value : "ask";
+    const langVal = $("st-gen-lang") ? ($("st-gen-lang").value === "en" ? "en" : "zh") : currentLang;
     const api = desktopApi();
     if (api && typeof api.setDesktopPrefs === "function") {
       await api.setDesktopPrefs({ closeBehavior: closeVal });
     }
     const payload = {
+      language: langVal,
       close_behavior: closeVal,
       max_turns: Number($("st-gen-max-turns").value),
       max_tokens: Number($("st-gen-max-tokens").value),
@@ -3124,14 +3493,14 @@ $("st-gen-save")?.addEventListener("click", async () => {
       body: JSON.stringify(payload),
     })).json();
     if (!r.ok) {
-      setGeneralFeedback("✕ " + (r.error || "保存失败"), "err");
+      setGeneralFeedback("✕ " + (r.error || (currentLang === "en" ? "Save failed" : "保存失败")), "err");
       return;
     }
     settingsState = r;
     populateGeneralSettings(r.general);
-    setGeneralFeedback("✓ 通用设置已保存并立即生效", "ok");
+    setGeneralFeedback(currentLang === "en" ? "✓ General settings saved and applied" : "✓ 通用设置已保存并立即生效", "ok");
   } catch (err) {
-    setGeneralFeedback("✕ 保存请求失败: " + err.message, "err");
+    setGeneralFeedback((currentLang === "en" ? "✕ Request failed: " : "✕ 保存请求失败: ") + err.message, "err");
   } finally {
     btn.disabled = false;
   }
@@ -3142,7 +3511,6 @@ $("st-pl-back")?.addEventListener("click", () => switchSettingsTab("plugins", nu
 $("st-pl-denable")?.addEventListener("change", () => {
   if (!activeSettingsPlugin) return;
   const on = $("st-pl-denable").checked;
-  $("st-pl-denable-txt").textContent = on ? "已启用" : "未启用";
   send({ type: "set_plugin_enabled", name: activeSettingsPlugin, enabled: on });
 });
 
@@ -3528,6 +3896,7 @@ $("st-save").addEventListener("click", async () => {
 // ---------- bootstrap ----------
 try {
   applyTheme(localStorage.getItem("codelet_theme"));
+  applyLanguage(localStorage.getItem("codelet_lang") || "zh");
   const savedSideW = Number(localStorage.getItem("codelet_side_w"));
   if (savedSideW >= 200 && savedSideW <= 520) setPaneWidth("--side-w", savedSideW);
   const savedInspW = Number(localStorage.getItem("codelet_insp_w"));
@@ -3538,7 +3907,15 @@ try {
   if (localStorage.getItem("codelet_insp_open") === "1") openInspector(activeInspectorTab);
 } catch (_) {
   applyTheme(null);
+  applyLanguage("zh");
 }
+// Sync language preference from backend settings.json on initial load
+safe("/api/settings").then((d) => {
+  if (d && d.general && (d.general.language === "en" || d.general.language === "zh")) {
+    try { localStorage.setItem("codelet_lang", d.general.language); } catch (_) {}
+    if (d.general.language !== currentLang) applyLanguage(d.general.language);
+  }
+});
 updateModeUI("ask");
 connect();
 loadSessions();
