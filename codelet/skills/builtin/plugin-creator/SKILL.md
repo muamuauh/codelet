@@ -21,7 +21,8 @@ Use this skill when the user wants a reusable **feature pack** (bundling Python 
 1. Choose a short kebab-case pack `name` (e.g. `sql-kit`, `release-ops`) and a clear one-line `description`.
 2. Declare `requires` if the pack consumes another plugin's service (e.g. `["memory"]` or `["cockpit"]`).
 3. Keep each tool small, typed (JSON-schema `parameters`), self-contained (imports inside the function body), and mark read-only tools with `read_only: true`.
-4. Pair tools with a concise `SKILL.md` explaining *when* and *in what order* to use them.
+4. If the plugin has user-configurable options (read via `ctx.config.get(...)`), declare an optional `settings_schema = [{"key": ..., "label": ..., "type": "boolean|string|number|select|json", "default": ..., "description": ...}]` list on the plugin class so codelet's **Settings → Plugins** page renders a native form for it automatically.
+5. Pair tools with a concise `SKILL.md` explaining *when* and *in what order* to use them.
 
 ## 3. Create, Hot-Mount & Verify
 

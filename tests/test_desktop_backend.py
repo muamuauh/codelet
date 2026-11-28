@@ -641,3 +641,120 @@ def test_cockpit_recognizes_active_resumed_session_as_live(tmp_path, monkeypatch
         assert body["viewing_history"] is False
 
 
+def test_settings_general_and_plugin_config_endpoints(tmp_path, monkeypatch):
+    import json
+
+    fake_settings = tmp_path / "settings.json"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("codelet.web.server._user_settings_file", lambda: fake_settings)
+    monkeypatch.setattr("codelet.web.server._workspace_states_file", lambda: tmp_path / "workspace_states.json")
+
+    app = create_app(auto_refresh=False)
+    client = TestClient(app)
+
+    # 1. GET /api/settings returns general defaults + plugins with declarative settings_schema
+    init = client.get("/api/settings").json()
+    assert "general" in init
+    assert init["general"]["max_turns"] >= 1
+    assert "plugins" in init
+    plugins_by_name = {p["name"]: p for p in init["plugins"]}
+    assert "rag" in plugins_by_name
+    assert "sandbox" in plugins_by_name
+    rag_keys = [f["key"] for f in plugins_by_name["rag"]["settings_schema"]]
+    assert "inject" in rag_keys and "top_k" in rag_keys
+
+    # 2. POST /api/settings/general persists and hot-applies to active connections
+    with client.websocket_connect("/ws") as ws:
+        for _ in range(8):
+            ws.receive_json()
+
+        r_gen = client.post(
+            "/api/settings/general",
+            json={
+                "close_behavior": "quit",
+                "max_turns": 45,
+                "max_tokens": 16384,
+                "context_window": 256000,
+                "compact_threshold_ratio": 0.8,
+                "compact_keep_recent": 8,
+                "models_auto_refresh": False,
+                "models_cache_ttl": 3600,
+            },
+        )
+        assert r_gen.status_code == 200
+        gen_body = r_gen.json()
+        assert gen_body["ok"] is True
+        assert gen_body["general"]["close_behavior"] == "quit"
+        assert gen_body["general"]["max_turns"] == 45
+        assert gen_body["general"]["max_tokens"] == 16384
+        assert gen_body["general"]["context_window"] == 256000
+        assert gen_body["general"]["compact_threshold_ratio"] == 0.8
+        assert gen_body["general"]["compact_keep_recent"] == 8
+        assert gen_body["general"]["models_auto_refresh"] is False
+        assert gen_body["general"]["models_cache_ttl"] == 3600
+
+        saved = json.loads(fake_settings.read_text(encoding="utf-8"))
+        assert saved["close_behavior"] == "quit"
+        assert saved["max_turns"] == 45
+        assert saved["models_cache_ttl_seconds"] == 3600
+
+        # 3. Enable `rag`, then POST /api/settings/plugin -> persists & hot-reloads active plugin
+        ws.send_json({"type": "set_plugin_enabled", "name": "rag", "enabled": True})
+        # Drain plugin enable response frames (plugins/tools/skills/commands/cockpit)
+        seen_plugins = False
+        for _ in range(6):
+            frame = ws.receive_json()
+            if frame.get("type") == "plugins":
+                seen_plugins = True
+                break
+        assert seen_plugins
+
+        r_pl = client.post(
+            "/api/settings/plugin",
+            json={"name": "rag", "config": {"inject": True, "top_k": 5}},
+        )
+        assert r_pl.status_code == 200
+        pl_body = r_pl.json()
+        assert pl_body["ok"] is True
+        assert pl_body["reloaded"] is True
+        rag_entry = next(p for p in pl_body["plugins"] if p["name"] == "rag")
+        assert rag_entry["config"]["inject"] is True
+        assert rag_entry["config"]["top_k"] == 5
+
+        saved2 = json.loads(fake_settings.read_text(encoding="utf-8"))
+        assert saved2["plugins"]["config"]["rag"] == {"inject": True, "top_k": 5}
+
+        # Reset plugin config back to defaults ({})
+        r_reset = client.post("/api/settings/plugin", json={"name": "rag", "config": {}})
+        assert r_reset.status_code == 200
+        saved3 = json.loads(fake_settings.read_text(encoding="utf-8"))
+        assert "rag" not in saved3.get("plugins", {}).get("config", {})
+
+
+def test_custom_plugin_settings_schema_discovered_in_settings_view(tmp_path, monkeypatch):
+    from codelet.plugins.loader import list_available_plugins
+
+    plugin_dir = tmp_path / ".codelet" / "plugins"
+    plugin_dir.mkdir(parents=True)
+    (plugin_dir / "my_custom.py").write_text(
+        'class _MyPlugin:\n'
+        '    name = "my_custom"\n'
+        '    description = "Custom plugin with settings"\n'
+        '    settings_schema = [\n'
+        '        {"key": "endpoint", "label": "Endpoint", "type": "string", "default": "https://example.com"},\n'
+        '        {"key": "retries", "label": "Retries", "type": "number", "default": 3, "min": 0, "max": 10},\n'
+        '    ]\n'
+        '    def setup(self, ctx):\n'
+        '        pass\n'
+        'PLUGIN = _MyPlugin()\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    items = list_available_plugins({"config": {"my_custom": {"retries": 7}}})
+    entry = next(p for p in items if p["name"] == "my_custom")
+    assert entry["builtin"] is False
+    assert [f["key"] for f in entry["settings_schema"]] == ["endpoint", "retries"]
+    assert entry["config"] == {"retries": 7}
+
+
+

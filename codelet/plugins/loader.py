@@ -57,6 +57,154 @@ BUILTIN_DESCRIPTIONS: dict[str, str] = {
     "mcp": "Bridge external MCP servers (stdio / HTTP) into native codelet tools (/mcp).",
 }
 
+# Declarative settings schemas for built-in plugins. Third-party or user-authored
+# plugins can define an identical `settings_schema = [...]` list on their plugin
+# object/class and the Settings Center will auto-render their configuration form.
+BUILTIN_SETTINGS_SCHEMAS: dict[str, list[dict[str, Any]]] = {
+    "cockpit": [
+        {
+            "key": "balance_ttl_seconds",
+            "label": "余额缓存时间（秒）",
+            "type": "number",
+            "default": 300,
+            "min": 30,
+            "max": 3600,
+            "step": 30,
+            "description": "查询中转站余额（如已配置管理密钥）的本地缓存有效期。",
+        },
+    ],
+    "rag": [
+        {
+            "key": "inject",
+            "label": "每轮自动注入检索上下文",
+            "type": "boolean",
+            "default": False,
+            "description": "开启后每次发送消息前自动用 BM25 检索并附带最相关片段；关闭时由模型按需调用 search_docs。",
+        },
+        {
+            "key": "top_k",
+            "label": "自动注入片段数 (top_k)",
+            "type": "number",
+            "default": 3,
+            "min": 1,
+            "max": 20,
+            "step": 1,
+            "description": "开启自动注入时附加的最大代码/文档片段数量。",
+        },
+        {
+            "key": "chunk_lines",
+            "label": "分块行数 (chunk_lines)",
+            "type": "number",
+            "default": 40,
+            "min": 10,
+            "max": 200,
+            "step": 5,
+            "description": "建立本地 BM25 索引时每个文本块的行数。",
+        },
+        {
+            "key": "max_files",
+            "label": "最大索引文件数 (max_files)",
+            "type": "number",
+            "default": 800,
+            "min": 50,
+            "max": 5000,
+            "step": 50,
+            "description": "工作区扫描上限，防止超大仓库拖慢首次建索引。",
+        },
+    ],
+    "sandbox": [
+        {
+            "key": "image",
+            "label": "Docker 镜像 (image)",
+            "type": "string",
+            "default": "python:3.12-slim",
+            "placeholder": "python:3.12-slim",
+            "description": "执行隔离命令所使用的一次性容器镜像（需要本机运行 Docker Desktop）。",
+        },
+        {
+            "key": "network",
+            "label": "允许容器访问网络 (network)",
+            "type": "boolean",
+            "default": False,
+            "description": "默认断网（--network none）确保最高安全性；开启后容器可访问外部网络。",
+        },
+    ],
+    "memory": [
+        {
+            "key": "dir",
+            "label": "项目记忆目录 (dir)",
+            "type": "string",
+            "default": ".codelet/memory",
+            "placeholder": ".codelet/memory",
+            "description": "当前工作区项目级 Markdown 记忆文件的保存路径。",
+        },
+        {
+            "key": "user_dir",
+            "label": "用户全局记忆目录 (user_dir)",
+            "type": "string",
+            "default": "~/.codelet/memory",
+            "placeholder": "~/.codelet/memory",
+            "description": "跨项目共享的个人偏好记忆（type=user）保存路径。",
+        },
+    ],
+    "router": [
+        {
+            "key": "llm",
+            "label": "规则不确定时启用模型兜底分类 (llm)",
+            "type": "boolean",
+            "default": False,
+            "description": "默认纯本地规则零耗时；开启后对规则拿不准的请求调用 compact_model 做一次轻量意图判定。",
+        },
+    ],
+    "evolve": [
+        {
+            "key": "dir",
+            "label": "自进化工具目录 (dir)",
+            "type": "string",
+            "default": ".codelet/evolved",
+            "placeholder": ".codelet/evolved",
+            "description": "通过 create_tool 生成的单工具 Python 文件保存目录。",
+        },
+    ],
+    "mcp": [
+        {
+            "key": "servers",
+            "label": "MCP 服务器配置 (servers JSON)",
+            "type": "json",
+            "default": {},
+            "placeholder": '{"demo": {"transport": "stdio", "command": ["python", "server.py"]}}',
+            "description": "按名称映射外部 MCP 服务，支持 stdio（本地子进程）与 http（远程端点）。",
+        },
+    ],
+}
+
+
+def _normalize_settings_schema(raw: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw, (list, tuple)):
+        return []
+    out: list[dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("key") or "").strip()
+        if not key:
+            continue
+        ftype = str(item.get("type") or "string").strip().lower()
+        if ftype not in ("boolean", "string", "number", "select", "json"):
+            ftype = "string"
+        entry: dict[str, Any] = {
+            "key": key,
+            "label": str(item.get("label") or key),
+            "type": ftype,
+            "default": item.get("default"),
+            "description": str(item.get("description") or ""),
+        }
+        for opt_k in ("min", "max", "step", "placeholder", "options"):
+            if opt_k in item and item[opt_k] is not None:
+                entry[opt_k] = item[opt_k]
+        out.append(entry)
+    return out
+
 
 @dataclass
 class AppliedPlugins:
@@ -467,9 +615,14 @@ def list_available_plugins(
     rows: list[dict[str, Any]] = []
     seen: set[str] = set()
 
+    per_cfg = (plugins_settings or {}).get("config") or {}
+    if not isinstance(per_cfg, dict):
+        per_cfg = {}
+
     for name in _BUILTIN:
         seen.add(name)
         det = applied_details.get(name) or {}
+        schema = _normalize_settings_schema(BUILTIN_SETTINGS_SCHEMAS.get(name, []))
         rows.append({
             "name": name,
             "description": BUILTIN_DESCRIPTIONS.get(name, ""),
@@ -483,6 +636,8 @@ def list_available_plugins(
             "skipped_reason": applied_skipped.get(name, ""),
             "has_turn_policy": bool(det.get("has_turn_policy", False)),
             "has_middleware": bool(det.get("has_middleware", False)),
+            "settings_schema": schema,
+            "config": dict(per_cfg.get(name) or {}) if isinstance(per_cfg.get(name), dict) else {},
         })
 
     for p in discover_plugins(plugin_dirs=plugin_dirs):
@@ -493,6 +648,7 @@ def list_available_plugins(
         det = applied_details.get(name) or {}
         doc = (getattr(p, "description", None) or (p.__class__.__doc__ or "")).strip().splitlines()
         reqs = list(det.get("requires") or list(getattr(p, "requires", ()) or ()))
+        schema = _normalize_settings_schema(getattr(p, "settings_schema", None))
         rows.append({
             "name": name,
             "description": doc[0] if doc else "",
@@ -506,6 +662,8 @@ def list_available_plugins(
             "skipped_reason": applied_skipped.get(name, ""),
             "has_turn_policy": bool(det.get("has_turn_policy", False)),
             "has_middleware": bool(det.get("has_middleware", False)),
+            "settings_schema": schema,
+            "config": dict(per_cfg.get(name) or {}) if isinstance(per_cfg.get(name), dict) else {},
         })
     return rows
 

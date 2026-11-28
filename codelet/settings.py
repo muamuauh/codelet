@@ -179,6 +179,28 @@ def load_settings(
             base = dict(user_cfg.get("profiles") or {})
             base.update(value)  # project profile entries replace user ones with same name
             merged["profiles"] = base
+        elif key == "plugins" and isinstance(value, dict):
+            u_pl = user_cfg.get("plugins") if isinstance(user_cfg.get("plugins"), dict) else {}
+            m_pl = dict(u_pl)
+            m_pl.update(value)
+            # Deep-merge per-plugin config maps so project overrides don't wipe user plugin settings.
+            u_cfg_map = u_pl.get("config") if isinstance(u_pl.get("config"), dict) else {}
+            p_cfg_map = value.get("config") if isinstance(value.get("config"), dict) else {}
+            if u_cfg_map or p_cfg_map:
+                merged_cfg_map: dict[str, Any] = {}
+                for pname in set(u_cfg_map) | set(p_cfg_map):
+                    uv = u_cfg_map.get(pname)
+                    pv = p_cfg_map.get(pname)
+                    if isinstance(uv, dict) and isinstance(pv, dict):
+                        comb = dict(uv)
+                        comb.update(pv)
+                        merged_cfg_map[pname] = comb
+                    elif pv is not None:
+                        merged_cfg_map[pname] = pv
+                    elif uv is not None:
+                        merged_cfg_map[pname] = uv
+                m_pl["config"] = merged_cfg_map
+            merged["plugins"] = m_pl
         else:
             merged[key] = value
 

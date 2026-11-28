@@ -68,8 +68,9 @@
         <span id="conn-dot" class="dot" title="Connecting…"></span>
         <span class="avatar-sm" id="user-avatar">m</span>
         <span id="user" class="prov" title="Signed-in user">muamuauh</span>
-        <button id="quit" class="quit" type="button" title="Stop server and close" aria-label="Stop server">
-          <svg class="ic" viewBox="0 0 24 24"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg>
+        <button id="open-settings" class="side-settings-btn settings-btn" type="button" title="设置（通用 / 模型 / 插件）" aria-label="Settings">
+          <svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          <span id="settings-dot" class="settings-dot hidden" title="API Key not configured"></span>
         </button>
       </div>
     </aside>
@@ -125,10 +126,6 @@
               <div class="tp-row"><span class="tp-k">上下文占用</span><span class="tp-v mono" id="tp-ctx">0%</span></div>
             </div>
           </div>
-          <button id="open-settings" class="top-btn settings-btn" type="button" title="API &amp; Model Settings" aria-label="Settings">
-            <svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-            <span id="settings-dot" class="settings-dot hidden" title="API Key not configured"></span>
-          </button>
           <button id="theme-toggle" class="top-btn" type="button" title="Toggle light / dark theme" aria-label="Toggle theme"></button>
           <button id="toggle-inspector" class="top-btn" type="button" title="Toggle Cockpit / Side / Tasks / Changes drawer" aria-label="Toggle right panel">
             <svg class="ic" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="15" y1="3" x2="15" y2="21"/></svg>
@@ -616,101 +613,240 @@
     </div>
   </div>
 
-  <!-- API & Model Settings modal -->
+  <!-- Settings Center modal (General / Models & API / Plugins -> per-plugin config) -->
   <div id="settings-modal" class="modal hidden">
-    <div class="modal-card settings-card">
-      <div class="modal-head">
-        <h3>API 与模型设置</h3>
-        <span id="st-vault-badge" class="vault-badge" title="Credential storage backend">环境变量</span>
-      </div>
+    <div class="modal-card settings-center">
+      <nav class="st-nav" aria-label="Settings sections">
+        <div class="st-nav-brand">设置</div>
+        <button class="st-nav-item" type="button" data-st-tab="general">
+          <svg class="ic" viewBox="0 0 24 24"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
+          <span>通用</span>
+        </button>
+        <button class="st-nav-item active" type="button" data-st-tab="models">
+          <svg class="ic" viewBox="0 0 24 24"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z"/></svg>
+          <span>模型与接口</span>
+          <span id="st-nav-key-dot" class="st-nav-dot hidden" title="API Key 未配置"></span>
+        </button>
+        <button class="st-nav-item" type="button" data-st-tab="plugins">
+          <svg class="ic" viewBox="0 0 24 24"><path d="M12 2v4"/><path d="M12 18v4"/><path d="M4.93 4.93l2.83 2.83"/><path d="M16.24 16.24l2.83 2.83"/><path d="M2 12h4"/><path d="M18 12h4"/><path d="M4.93 19.07l2.83-2.83"/><path d="M16.24 7.76l2.83-2.83"/><circle cx="12" cy="12" r="3"/></svg>
+          <span>插件</span>
+        </button>
+      </nav>
 
-      <div class="st-row st-prof-row">
-        <label class="st-lbl" for="st-prof-select">配置方案</label>
-        <div class="st-prof-ctl">
-          <select id="st-prof-select" class="st-input"></select>
-          <button id="st-prof-new" class="btn ghost sm" type="button">+ 新建</button>
-          <button id="st-prof-del" class="btn ghost sm danger-txt" type="button" title="Delete selected profile">删除</button>
+      <div class="st-main">
+        <div class="st-main-head">
+          <h3 id="st-pane-title">模型与接口</h3>
+          <button id="st-close-x" class="top-btn" type="button" title="关闭设置" aria-label="Close settings">
+            <svg class="ic" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
         </div>
-      </div>
 
-      <div class="st-presets" id="st-presets">
-        <span class="st-preset-lbl">快速填充：</span>
-        <button class="st-preset" type="button" data-preset="openai">OpenAI</button>
-        <button class="st-preset" type="button" data-preset="anthropic">Anthropic</button>
-        <button class="st-preset" type="button" data-preset="deepseek">DeepSeek</button>
-        <button class="st-preset" type="button" data-preset="openrouter">OpenRouter</button>
-        <button class="st-preset" type="button" data-preset="custom">自定义中转/兼容站</button>
-      </div>
+        <div class="st-main-scroll">
+          <!-- Tab 1: General -->
+          <section class="st-pane hidden" data-st-pane="general">
+            <div class="st-sec">
+              <div class="st-sec-title">外观与窗口行为</div>
+              <div class="st-opt-row">
+                <div class="st-opt-info"><b>主题外观</b><small>切换浅色、深色或跟随操作系统</small></div>
+                <select id="st-gen-theme" class="st-input st-opt-ctl">
+                  <option value="system">跟随系统</option>
+                  <option value="light">浅色 (Light)</option>
+                  <option value="dark">深色 (Dark)</option>
+                </select>
+              </div>
+              <div id="st-gen-close-row" class="st-opt-row">
+                <div class="st-opt-info"><b>关闭主窗口时</b><small>桌面端点击右上角 × 关闭按钮时的行为（最小化到托盘或直接退出）</small></div>
+                <select id="st-gen-close" class="st-input st-opt-ctl">
+                  <option value="ask">每次询问（推荐）</option>
+                  <option value="tray">最小化到系统托盘</option>
+                  <option value="quit">直接退出应用</option>
+                </select>
+              </div>
+            </div>
 
-      <div class="st-grid">
-        <div class="st-field">
-          <label class="st-lbl" for="st-name">方案名称 (Profile)</label>
-          <input id="st-name" class="st-input mono" type="text" placeholder="default" autocomplete="off" />
-        </div>
-        <div class="st-field">
-          <label class="st-lbl" for="st-provider">接口协议 (Provider)</label>
-          <select id="st-provider" class="st-input">
-            <option value="openai">OpenAI 兼容（含各大中转站 / DeepSeek / Ollama）</option>
-            <option value="anthropic">Anthropic 原生（Claude API）</option>
-          </select>
-        </div>
-      </div>
+            <div class="st-sec">
+              <div class="st-sec-title">Agent 与上下文运行参数</div>
+              <div class="st-grid">
+                <div class="st-field">
+                  <label class="st-lbl" for="st-gen-max-turns">单轮最大工具步数 (max_turns)</label>
+                  <input id="st-gen-max-turns" class="st-input mono" type="number" min="1" max="200" />
+                </div>
+                <div class="st-field">
+                  <label class="st-lbl" for="st-gen-max-tokens">单次最大输出 Token (max_tokens)</label>
+                  <input id="st-gen-max-tokens" class="st-input mono" type="number" min="256" max="131072" step="256" />
+                </div>
+                <div class="st-field">
+                  <label class="st-lbl" for="st-gen-ctx-win">默认上下文窗口 (context_window)</label>
+                  <input id="st-gen-ctx-win" class="st-input mono" type="number" min="4096" max="2000000" step="4096" />
+                </div>
+                <div class="st-field">
+                  <label class="st-lbl" for="st-gen-compact-ratio">自动压缩阈值比例 (0.30 ~ 0.95)</label>
+                  <input id="st-gen-compact-ratio" class="st-input mono" type="number" min="0.3" max="0.95" step="0.05" />
+                </div>
+                <div class="st-field">
+                  <label class="st-lbl" for="st-gen-keep-recent">压缩保留最近消息数 (compact_keep_recent)</label>
+                  <input id="st-gen-keep-recent" class="st-input mono" type="number" min="1" max="50" />
+                </div>
+                <div class="st-field">
+                  <label class="st-lbl" for="st-gen-cache-ttl">模型目录缓存时间（秒）</label>
+                  <input id="st-gen-cache-ttl" class="st-input mono" type="number" min="60" max="604800" step="60" />
+                </div>
+              </div>
+              <label class="st-check-row">
+                <input id="st-gen-auto-refresh" type="checkbox" />
+                <span>启动及缓存过期后自动从接口拉取模型列表 (models_auto_refresh)</span>
+              </label>
+            </div>
 
-      <div class="st-field">
-        <label class="st-lbl" for="st-base-url">Base URL</label>
-        <input id="st-base-url" class="st-input mono" type="text" placeholder="https://api.openai.com/v1（Anthropic 默认可留空）" autocomplete="off" />
-      </div>
+            <div class="st-sec">
+              <div class="st-sec-title">应用与服务</div>
+              <div class="st-app-acts">
+                <button id="st-check-updates" class="btn ghost sm hidden" type="button">检查桌面版更新…</button>
+                <button id="st-quit-app" class="btn ghost sm danger-txt" type="button">停止服务 / 退出应用</button>
+              </div>
+            </div>
 
-      <div class="st-grid">
-        <div class="st-field">
-          <label class="st-lbl" for="st-model">默认模型 (Model)</label>
-          <input id="st-model" class="st-input mono" type="text" placeholder="如 deepseek-chat / claude-sonnet-4-5" autocomplete="off" />
-        </div>
-        <div class="st-field">
-          <label class="st-lbl" for="st-key-env">密钥标识名 (Env / Vault Key)</label>
-          <input id="st-key-env" class="st-input mono" type="text" placeholder="LLM_API_KEY" autocomplete="off" />
-        </div>
-      </div>
+            <div id="st-gen-feedback" class="st-feedback hidden"></div>
+            <div class="modal-actions st-actions">
+              <span class="st-spacer"></span>
+              <button id="st-gen-save" class="btn primary" type="button">保存通用设置</button>
+            </div>
+          </section>
 
-      <div class="st-field">
-        <div class="st-lbl-row">
-          <label class="st-lbl" for="st-api-key">API Key</label>
-          <span id="st-key-status" class="st-key-status mono"></span>
-        </div>
-        <div class="st-key-wrap">
-          <input id="st-api-key" class="st-input mono" type="password" placeholder="输入新的 API Key（已配置时留空则保持不变）" autocomplete="new-password" />
-          <button id="st-key-eye" class="btn ghost sm" type="button" title="Show / hide key">显示</button>
-          <button id="st-key-clear" class="btn ghost sm danger-txt" type="button" title="Remove saved API key">清除</button>
-        </div>
-        <div id="st-security-note" class="st-hint">桌面端使用 Windows DPAPI 加密保存，不落明文到磁盘；配置元数据保存至 ~/.codelet/settings.json。</div>
-      </div>
+          <!-- Tab 2: Models & API -->
+          <section class="st-pane" data-st-pane="models">
+            <p class="st-models-intro">填入各提供商的 API 密钥即可使用其模型。</p>
 
-      <div class="st-mdir">
-        <div class="st-mdir-head">
-          <div class="st-mdir-title">
-            <span class="st-lbl">模型目录</span>
-            <span id="st-models-sub" class="st-mdir-sub">正在使用适配器 / 接口默认模型</span>
-          </div>
-          <div class="st-mdir-acts">
-            <button id="st-fetch-models" class="btn ghost sm" type="button" title="直接调用 /models 接口拉取模型列表">从接口拉取</button>
-            <button id="st-discover-models" class="btn ghost sm" type="button" title="用当前配置的模型自动阅读中转站文档并提取可用模型">AI 读文档发现</button>
-          </div>
-        </div>
-        <div class="st-mdir-cols" id="st-mdir-cols">
-          <span>API 模型 ID</span>
-          <span>显示名称</span>
-        </div>
-        <div id="st-models-list" class="st-models-list"></div>
-        <button id="st-add-model" class="btn ghost sm st-add-model" type="button">+ 添加模型</button>
-      </div>
+            <!-- Configured provider cards list -->
+            <div id="st-prov-list" class="st-prov-list"></div>
 
-      <div id="st-feedback" class="st-feedback hidden"></div>
+            <!-- Inline Add / Edit provider card -->
+            <div id="st-prov-editor" class="st-prov-editor hidden">
+              <div class="st-mode-tabs" id="st-pmode-tabs" role="tablist">
+                <button class="st-mode-tab active" type="button" data-pmode="builtin" role="tab">第三方模型提供商</button>
+                <button class="st-mode-tab" type="button" data-pmode="custom" role="tab">自定义模型 API</button>
+              </div>
+              <p id="st-pmode-desc" class="st-pmode-desc">从内置目录中选择 OpenAI、Anthropic、DeepSeek、Kimi、ZenMux 等提供商，填入其 API 密钥即可使用。</p>
 
-      <div class="modal-actions st-actions">
-        <button id="st-test" class="btn ghost" type="button">测试连接</button>
-        <span class="st-spacer"></span>
-        <button id="st-cancel" class="btn ghost" type="button">取消</button>
-        <button id="st-save" class="btn primary" type="button">保存并立即生效</button>
+              <div id="st-builtin-row" class="st-field">
+                <label class="st-lbl" for="st-preset-select">提供商</label>
+                <select id="st-preset-select" class="st-input st-prov-sel"></select>
+              </div>
+
+              <div class="st-field">
+                <div class="st-lbl-row">
+                  <label class="st-lbl" for="st-api-key">API 密钥 <span class="st-qmark" title="桌面端通过 Windows DPAPI 加密存入本机凭据库；也可通过对应环境变量提供">?</span></label>
+                  <span id="st-key-status" class="st-key-status mono"></span>
+                </div>
+                <div class="st-key-wrap">
+                  <input id="st-api-key" class="st-input mono" type="password" placeholder="留空使用环境认证 (LLM_API_KEY)" autocomplete="new-password" />
+                  <button id="st-key-eye" class="btn ghost sm" type="button" title="显示 / 隐藏密钥">显示</button>
+                  <button id="st-key-clear" class="btn ghost sm danger-txt" type="button" title="清除已保存的 API 密钥">清除</button>
+                </div>
+                <div id="st-key-env-hint" class="st-env-hint"></div>
+                <div id="st-security-note" class="st-hint">桌面端使用 Windows DPAPI 加密保存，不落明文到磁盘；配置元数据保存至 ~/.codelet/settings.json。</div>
+              </div>
+
+              <details id="st-adv-details" class="st-adv">
+                <summary class="st-adv-sum">
+                  <svg class="ic st-adv-chev" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"/></svg>
+                  <span>自定义设置</span>
+                </summary>
+                <div class="st-adv-body">
+                  <div class="st-grid">
+                    <div class="st-field">
+                      <label class="st-lbl" for="st-name">配置名称</label>
+                      <input id="st-name" class="st-input mono" type="text" placeholder="default" autocomplete="off" />
+                    </div>
+                    <div class="st-field">
+                      <label class="st-lbl" for="st-provider">接口协议</label>
+                      <select id="st-provider" class="st-input">
+                        <option value="openai">OpenAI 兼容（含各大中转站 / DeepSeek / Ollama）</option>
+                        <option value="anthropic">Anthropic 原生（Claude API）</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div class="st-field">
+                    <label class="st-lbl" for="st-base-url">Base URL</label>
+                    <input id="st-base-url" class="st-input mono" type="text" placeholder="https://api.openai.com/v1（Anthropic 默认可留空）" autocomplete="off" />
+                  </div>
+
+                  <div class="st-grid">
+                    <div class="st-field">
+                      <label class="st-lbl" for="st-model">默认模型</label>
+                      <input id="st-model" class="st-input mono" type="text" placeholder="如 deepseek-chat / claude-sonnet-4-5" autocomplete="off" />
+                    </div>
+                    <div class="st-field">
+                      <label class="st-lbl" for="st-key-env">密钥环境变量名</label>
+                      <input id="st-key-env" class="st-input mono" type="text" placeholder="LLM_API_KEY" autocomplete="off" />
+                    </div>
+                  </div>
+
+                  <div class="st-mdir">
+                    <div class="st-mdir-head">
+                      <div class="st-mdir-title">
+                        <span class="st-lbl">模型目录</span>
+                        <span id="st-models-sub" class="st-mdir-sub">正在使用适配器 / 接口默认模型</span>
+                      </div>
+                      <div class="st-mdir-acts">
+                        <button id="st-fetch-models" class="btn ghost sm" type="button" title="直接调用 /models 接口拉取模型列表">从接口拉取</button>
+                        <button id="st-discover-models" class="btn ghost sm" type="button" title="用当前配置的模型自动阅读中转站文档并提取可用模型">AI 读文档发现</button>
+                      </div>
+                    </div>
+                    <div class="st-mdir-cols" id="st-mdir-cols">
+                      <span>API 模型 ID</span>
+                      <span>显示名称</span>
+                    </div>
+                    <div id="st-models-list" class="st-models-list"></div>
+                    <button id="st-add-model" class="btn ghost sm st-add-model" type="button">+ 添加模型</button>
+                  </div>
+                </div>
+              </details>
+
+              <div id="st-feedback" class="st-feedback hidden"></div>
+
+              <div class="modal-actions st-actions">
+                <button id="st-test" class="btn ghost sm" type="button">测试连接</button>
+                <button id="st-prof-del" class="btn ghost sm danger-txt hidden" type="button">删除</button>
+                <span class="st-spacer"></span>
+                <button id="st-cancel" class="btn ghost" type="button">取消</button>
+                <button id="st-save" class="btn primary" type="button">保存</button>
+              </div>
+            </div>
+
+            <button id="st-prov-add" class="st-prov-add" type="button">+ 添加模型提供商</button>
+          </section>
+
+          <!-- Tab 3: Plugins overview & per-plugin settings -->
+          <section class="st-pane hidden" data-st-pane="plugins">
+            <div id="st-pl-overview" class="st-pl-overview"></div>
+            <div id="st-pl-detail" class="st-pl-detail hidden">
+              <div class="st-pl-dhead">
+                <div class="st-pl-dmeta">
+                  <div class="st-pl-dtitle-row">
+                    <button id="st-pl-back" class="btn ghost sm" type="button">← 全部插件</button>
+                    <span id="st-pl-dname" class="mono st-pl-dname"></span>
+                    <span id="st-pl-dbadge" class="p-chip"></span>
+                  </div>
+                  <p id="st-pl-ddesc" class="st-pl-ddesc"></p>
+                  <div id="st-pl-dchips" class="p-chips"></div>
+                </div>
+                <label class="st-switch-lbl" title="启用或禁用此插件（按当前工作区记住）">
+                  <input id="st-pl-denable" type="checkbox" />
+                  <span id="st-pl-denable-txt">已启用</span>
+                </label>
+              </div>
+              <div id="st-pl-form" class="st-pl-form"></div>
+              <div id="st-pl-feedback" class="st-feedback hidden"></div>
+              <div class="modal-actions st-actions">
+                <button id="st-pl-reset" class="btn ghost" type="button">恢复默认</button>
+                <span class="st-spacer"></span>
+                <button id="st-pl-save" class="btn primary" type="button">保存插件设置</button>
+              </div>
+            </div>
+          </section>
+        </div>
       </div>
     </div>
   </div>

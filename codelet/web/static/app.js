@@ -1324,8 +1324,9 @@ function onProfile(ev) {
   if (Array.isArray(ev.model_catalog) && ev.model_catalog.length) modelCatalog = ev.model_catalog;
   else if (Array.isArray(ev.models)) modelCatalog = ev.models.map((id) => ({ id, owned_by: id.includes("/") ? id.split("/")[0] : "" }));
   if (ev.models_meta) modelsMeta = ev.models_meta;
-  if ($("settings-dot") && typeof ev.api_key_configured === "boolean") {
-    $("settings-dot").classList.toggle("hidden", ev.api_key_configured);
+  if (typeof ev.api_key_configured === "boolean") {
+    $("settings-dot")?.classList.toggle("hidden", ev.api_key_configured);
+    $("st-nav-key-dot")?.classList.toggle("hidden", ev.api_key_configured);
   }
   setRefreshing(false);
   updateModelChip();
@@ -1612,6 +1613,8 @@ function applyTheme(theme) {
   const isDark = theme === "dark" || (!theme && window.matchMedia("(prefers-color-scheme: dark)").matches);
   $("theme-toggle").innerHTML = isDark ? SVG_SUN : SVG_MOON;
   $("theme-toggle").title = isDark ? "Switch to light theme" : "Switch to dark theme";
+  const genTheme = $("st-gen-theme");
+  if (genTheme) genTheme.value = (theme === "dark" || theme === "light") ? theme : "system";
 }
 $("theme-toggle").addEventListener("click", () => {
   const cur = document.documentElement.getAttribute("data-theme");
@@ -2060,6 +2063,7 @@ function renderPluginsList(rows) {
   const ul = $("plugins"); ul.innerHTML = "";
   const list = Array.isArray(rows) ? rows : [];
   $("cnt-plugins").textContent = `${list.filter((p) => p.enabled).length}/${list.length}`;
+  syncSettingsPluginsLive(list);
   if (!list.length) { ul.appendChild(el("li", "meta", "(none)")); return; }
   list.forEach((p) => {
     const li = el("li", "plugin-row" + (p.enabled ? "" : " off"));
@@ -2156,21 +2160,22 @@ function renderSkillsList(rows) {
   appendGroup("Standalone", other);
 }
 
-$("quit").addEventListener("click", async () => {
+async function triggerQuitApp() {
   const api = desktopApi();
   if (api && typeof api.quitApp === "function") {
-    const ok = await askConfirm({ title: "Quit codelet?", message: "This will exit codelet Desktop and stop the local backend server.", okText: "Quit", danger: true });
+    const ok = await askConfirm({ title: "退出 codelet？", message: "将退出 codelet 桌面端并停止本地后端服务。", okText: "退出", danger: true });
     if (!ok) return;
     await api.quitApp();
     return;
   }
-  const ok = await askConfirm({ title: "Stop codelet server?", message: "This will shut down the local backend server and disconnect this tab.", okText: "Stop server", danger: true });
+  const ok = await askConfirm({ title: "停止 codelet 服务？", message: "将关闭本地后端服务并断开当前页面连接。", okText: "停止服务", danger: true });
   if (!ok) return;
   try { await fetch("/api/shutdown", { method: "POST" }); } catch (_) {}
   if (ws) { ws.onclose = null; ws.close(); }
   setConnState("err");
   document.body.innerHTML = '<div style="display:grid;place-items:center;height:100vh;font:15px system-ui;color:#888;background:#18191c">codelet server stopped — you can close this tab.</div>';
-});
+}
+$("st-quit-app")?.addEventListener("click", triggerQuitApp);
 
 // ---------- desktop integration hooks ----------
 {
@@ -2266,11 +2271,16 @@ $("ut-releases")?.addEventListener("click", () => {
 
 // ---------- API & Model Settings Modal (with Desktop DPAPI vault) ----------
 const SETTINGS_PRESETS = {
-  openai: { name: "openai", provider: "openai", base_url: "https://api.openai.com/v1", model: "gpt-4.1", api_key_env: "OPENAI_API_KEY" },
-  anthropic: { name: "anthropic", provider: "anthropic", base_url: "https://api.anthropic.com", model: "claude-sonnet-4-5", api_key_env: "ANTHROPIC_API_KEY" },
-  deepseek: { name: "deepseek", provider: "openai", base_url: "https://api.deepseek.com/v1", model: "deepseek-chat", api_key_env: "DEEPSEEK_API_KEY" },
-  openrouter: { name: "openrouter", provider: "openai", base_url: "https://openrouter.ai/api/v1", model: "anthropic/claude-sonnet-4.5", api_key_env: "OPENROUTER_API_KEY" },
-  custom: { name: "custom", provider: "openai", base_url: "", model: "", api_key_env: "LLM_API_KEY" },
+  zenmux: { label: "ZenMux", name: "zenmux", provider: "openai", base_url: "https://zenmux.ai/api/v1", model: "", api_key_env: "ZENMUX_API_KEY" },
+  openai: { label: "OpenAI", name: "openai", provider: "openai", base_url: "https://api.openai.com/v1", model: "gpt-4.1", api_key_env: "OPENAI_API_KEY" },
+  anthropic: { label: "Anthropic", name: "anthropic", provider: "anthropic", base_url: "https://api.anthropic.com", model: "claude-sonnet-4-5", api_key_env: "ANTHROPIC_API_KEY" },
+  deepseek: { label: "DeepSeek", name: "deepseek", provider: "openai", base_url: "https://api.deepseek.com/v1", model: "deepseek-chat", api_key_env: "DEEPSEEK_API_KEY" },
+  kimi: { label: "Kimi (Moonshot)", name: "kimi", provider: "openai", base_url: "https://api.moonshot.cn/v1", model: "moonshot-v1-auto", api_key_env: "MOONSHOT_API_KEY" },
+  openrouter: { label: "OpenRouter", name: "openrouter", provider: "openai", base_url: "https://openrouter.ai/api/v1", model: "anthropic/claude-sonnet-4.5", api_key_env: "OPENROUTER_API_KEY" },
+  qwen: { label: "Qwen (通义千问)", name: "qwen", provider: "openai", base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1", model: "qwen-max", api_key_env: "DASHSCOPE_API_KEY" },
+  siliconflow: { label: "SiliconFlow (硅基流动)", name: "siliconflow", provider: "openai", base_url: "https://api.siliconflow.cn/v1", model: "deepseek-ai/DeepSeek-V3", api_key_env: "SILICONFLOW_API_KEY" },
+  ollama: { label: "Ollama (本地)", name: "ollama", provider: "openai", base_url: "http://localhost:11434/v1", model: "qwen2.5-coder", api_key_env: "OLLAMA_API_KEY" },
+  custom: { label: "自定义 API", name: "custom", provider: "openai", base_url: "", model: "", api_key_env: "LLM_API_KEY" },
 };
 let settingsState = null;
 let settingsVaultInfo = null;
@@ -2278,6 +2288,11 @@ let settingsClearKeyPending = false;
 let settingsModelsDraft = [];
 let settingsRelaySelected = false;
 let discoverContext = null;
+let activeSettingsTab = "general";
+let activeSettingsPlugin = null;
+let livePluginsCache = [];
+let editingProfileName = null;   // string name when editing existing, "" when adding new, null when editor closed
+let editorProviderMode = "builtin"; // "builtin" | "custom"
 
 const OFFICIAL_HOSTS = new Set(["api.openai.com", "api.anthropic.com", "api.deepseek.com", "openrouter.ai", "localhost", "127.0.0.1"]);
 
@@ -2293,11 +2308,340 @@ function isRelayEndpoint(baseUrl) {
   }
 }
 
-function setSettingsFeedback(msg, kind = "") {
-  const box = $("st-feedback");
+function setBoxFeedback(id, msg, kind = "") {
+  const box = $(id);
+  if (!box) return;
   if (!msg) { box.className = "st-feedback hidden"; box.textContent = ""; return; }
   box.className = "st-feedback" + (kind ? " " + kind : "");
   box.textContent = msg;
+}
+function setSettingsFeedback(msg, kind = "") { setBoxFeedback("st-feedback", msg, kind); }
+function setGeneralFeedback(msg, kind = "") { setBoxFeedback("st-gen-feedback", msg, kind); }
+function setPluginFeedback(msg, kind = "") { setBoxFeedback("st-pl-feedback", msg, kind); }
+
+function getSettingsPlugins() {
+  if (settingsState && Array.isArray(settingsState.plugins)) return settingsState.plugins;
+  return livePluginsCache;
+}
+
+function syncSettingsPluginsLive(rows) {
+  livePluginsCache = Array.isArray(rows) ? rows : [];
+  if (settingsState) {
+    settingsState.plugins = livePluginsCache;
+  }
+  const modal = $("settings-modal");
+  if (!modal || modal.classList.contains("hidden")) return;
+  renderSettingsPluginsNav();
+  if (activeSettingsTab === "plugins") {
+    if (activeSettingsPlugin) {
+      const p = getSettingsPlugins().find((x) => x.name === activeSettingsPlugin);
+      if (p) {
+        const cb = $("st-pl-denable");
+        const txt = $("st-pl-denable-txt");
+        if (cb) cb.checked = !!p.enabled;
+        if (txt) txt.textContent = p.enabled ? "已启用" : "未启用";
+        renderPluginDetailChips(p);
+      }
+    } else {
+      renderSettingsPluginsOverview();
+    }
+  }
+}
+
+function renderSettingsPluginsNav() {
+  const list = getSettingsPlugins();
+  const cntEl = $("st-nav-pl-cnt");
+  if (cntEl) cntEl.textContent = `${list.filter((p) => p.enabled).length}/${list.length}`;
+  const sub = $("st-nav-plugins");
+  if (!sub) return;
+  sub.innerHTML = "";
+  list.forEach((p) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "st-nav-sub-item" + (activeSettingsTab === "plugins" && activeSettingsPlugin === p.name ? " active" : "");
+    btn.dataset.stPlugin = p.name;
+    btn.title = p.description || p.name;
+    const dot = el("span", "st-nav-sub-dot" + (p.enabled ? " on" : ""));
+    const nm = el("span", "st-nav-sub-name", p.name);
+    btn.appendChild(dot);
+    btn.appendChild(nm);
+    btn.addEventListener("click", () => switchSettingsTab("plugins", p.name));
+    sub.appendChild(btn);
+  });
+}
+
+function renderPluginDetailChips(p) {
+  const chips = $("st-pl-dchips");
+  if (!chips) return;
+  chips.innerHTML = "";
+  (p.requires || []).forEach((r) => chips.appendChild(el("span", "p-chip req", "req:" + r)));
+  (p.tools || []).forEach((t) => chips.appendChild(el("span", "p-chip", t)));
+  (p.skills || []).forEach((s) => chips.appendChild(el("span", "p-chip skill", "✦ " + s)));
+  (p.panels || []).forEach((pn) => chips.appendChild(el("span", "p-chip panel", "◫ " + (pn.title || pn.id))));
+  (p.commands || []).forEach((c) => chips.appendChild(el("span", "p-chip cmd", "/" + c)));
+  if (p.has_turn_policy) chips.appendChild(el("span", "p-chip", "turn policy"));
+  if (p.has_middleware) chips.appendChild(el("span", "p-chip", "middleware"));
+  if (p.skipped_reason) chips.appendChild(el("span", "p-chip warn", p.skipped_reason));
+}
+
+function renderSettingsPluginsOverview() {
+  const box = $("st-pl-overview");
+  if (!box) return;
+  box.innerHTML = "";
+  const list = getSettingsPlugins();
+  if (!list.length) {
+    box.appendChild(el("div", "st-hint", "暂未发现可用插件。你可以在 ~/.codelet/plugins/ 或当前项目的 .codelet/plugins/ 下添加插件。"));
+    return;
+  }
+  list.forEach((p) => {
+    const card = el("div", "st-pl-card");
+    const main = el("div", "st-pl-card-main");
+    main.addEventListener("click", () => switchSettingsTab("plugins", p.name));
+    const top = el("div", "st-pl-card-top");
+    top.appendChild(el("span", "st-pl-card-name", p.name));
+    top.appendChild(el("span", "p-chip" + (p.builtin ? "" : " skill"), p.builtin ? "内置" : "自定义"));
+    const schemaLen = Array.isArray(p.settings_schema) ? p.settings_schema.length : 0;
+    if (schemaLen > 0) top.appendChild(el("span", "p-chip", `${schemaLen} 项设置`));
+    main.appendChild(top);
+    if (p.description) main.appendChild(el("div", "st-pl-card-desc", p.description));
+
+    const acts = el("div", "st-pl-card-acts");
+    const sw = el("label", "st-switch-lbl");
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = !!p.enabled;
+    cb.addEventListener("change", () => send({ type: "set_plugin_enabled", name: p.name, enabled: cb.checked }));
+    sw.appendChild(cb);
+    sw.appendChild(el("span", null, p.enabled ? "启用" : "关闭"));
+    const cfgBtn = el("button", "btn ghost sm", "设置 →");
+    cfgBtn.type = "button";
+    cfgBtn.addEventListener("click", () => switchSettingsTab("plugins", p.name));
+    acts.appendChild(sw);
+    acts.appendChild(cfgBtn);
+
+    card.appendChild(main);
+    card.appendChild(acts);
+    box.appendChild(card);
+  });
+}
+
+function openPluginSettingsDetail(name) {
+  const list = getSettingsPlugins();
+  const p = list.find((x) => x.name === name);
+  if (!p) {
+    activeSettingsPlugin = null;
+    $("st-pl-detail")?.classList.add("hidden");
+    $("st-pl-overview")?.classList.remove("hidden");
+    renderSettingsPluginsOverview();
+    return;
+  }
+  activeSettingsPlugin = p.name;
+  $("st-pl-overview")?.classList.add("hidden");
+  $("st-pl-detail")?.classList.remove("hidden");
+  $("st-pl-dname").textContent = p.name;
+  const badge = $("st-pl-dbadge");
+  badge.textContent = p.builtin ? "内置插件" : "自定义插件";
+  badge.className = "p-chip" + (p.builtin ? "" : " skill");
+  $("st-pl-ddesc").textContent = p.description || "无简介";
+  renderPluginDetailChips(p);
+
+  const cb = $("st-pl-denable");
+  const txt = $("st-pl-denable-txt");
+  cb.checked = !!p.enabled;
+  txt.textContent = p.enabled ? "已启用" : "未启用";
+
+  const form = $("st-pl-form");
+  form.innerHTML = "";
+  const cfg = (p.config && typeof p.config === "object") ? p.config : {};
+  const schema = Array.isArray(p.settings_schema) ? p.settings_schema : [];
+
+  if (schema.length > 0) {
+    schema.forEach((field) => {
+      const wrap = el("div", "st-pl-field");
+      const key = field.key;
+      const ftype = field.type || "string";
+      const val = Object.prototype.hasOwnProperty.call(cfg, key) ? cfg[key] : field.default;
+
+      if (ftype === "boolean") {
+        const row = el("label", "st-pl-field-row");
+        row.style.cursor = "pointer";
+        row.appendChild(el("span", "st-pl-field-lbl", field.label || key));
+        const inp = document.createElement("input");
+        inp.type = "checkbox";
+        inp.checked = Boolean(val);
+        inp.dataset.plKey = key;
+        inp.dataset.plType = "boolean";
+        inp.style.accentColor = "var(--accent)";
+        inp.style.width = "16px";
+        inp.style.height = "16px";
+        row.appendChild(inp);
+        wrap.appendChild(row);
+      } else {
+        const lbl = el("label", "st-pl-field-lbl", field.label || key);
+        wrap.appendChild(lbl);
+        if (ftype === "select" && Array.isArray(field.options)) {
+          const sel = document.createElement("select");
+          sel.className = "st-input";
+          sel.dataset.plKey = key;
+          sel.dataset.plType = "select";
+          field.options.forEach((opt) => {
+            const o = document.createElement("option");
+            const oVal = (opt && typeof opt === "object") ? String(opt.value ?? "") : String(opt);
+            const oLbl = (opt && typeof opt === "object") ? String(opt.label ?? oVal) : oVal;
+            o.value = oVal;
+            o.textContent = oLbl;
+            sel.appendChild(o);
+          });
+          if (val != null) sel.value = String(val);
+          wrap.appendChild(sel);
+        } else if (ftype === "number") {
+          const inp = document.createElement("input");
+          inp.type = "number";
+          inp.className = "st-input mono";
+          inp.dataset.plKey = key;
+          inp.dataset.plType = "number";
+          if (field.min != null) inp.min = String(field.min);
+          if (field.max != null) inp.max = String(field.max);
+          if (field.step != null) inp.step = String(field.step);
+          if (field.placeholder) inp.placeholder = field.placeholder;
+          inp.value = val != null ? String(val) : "";
+          wrap.appendChild(inp);
+        } else if (ftype === "json") {
+          const ta = document.createElement("textarea");
+          ta.className = "st-pl-json";
+          ta.dataset.plKey = key;
+          ta.dataset.plType = "json";
+          ta.spellcheck = false;
+          if (field.placeholder) ta.placeholder = field.placeholder;
+          try {
+            ta.value = val !== undefined ? JSON.stringify(val, null, 2) : (field.default !== undefined ? JSON.stringify(field.default, null, 2) : "{}");
+          } catch (_) {
+            ta.value = "{}";
+          }
+          wrap.appendChild(ta);
+        } else {
+          const inp = document.createElement("input");
+          inp.type = "text";
+          inp.className = "st-input mono";
+          inp.dataset.plKey = key;
+          inp.dataset.plType = "string";
+          if (field.placeholder) inp.placeholder = field.placeholder;
+          inp.value = val != null ? String(val) : "";
+          wrap.appendChild(inp);
+        }
+      }
+      if (field.description) wrap.appendChild(el("div", "st-pl-field-desc", field.description));
+      form.appendChild(wrap);
+    });
+  } else {
+    const wrap = el("div", "st-pl-field");
+    wrap.appendChild(el("label", "st-pl-field-lbl", "自定义插件配置 (JSON)"));
+    wrap.appendChild(el("div", "st-pl-field-desc", "该插件未声明 settings_schema，可直接以 JSON 对象编辑其配置（保存至 ~/.codelet/settings.json 的 plugins.config）。在插件中声明 settings_schema 即可自动生成表单。"));
+    const ta = document.createElement("textarea");
+    ta.className = "st-pl-json";
+    ta.dataset.plRaw = "1";
+    ta.spellcheck = false;
+    try { ta.value = JSON.stringify(cfg, null, 2); } catch (_) { ta.value = "{}"; }
+    wrap.appendChild(ta);
+    form.appendChild(wrap);
+  }
+  setPluginFeedback("");
+}
+
+function collectPluginSettingsForm(plugin) {
+  const form = $("st-pl-form");
+  const rawEl = form?.querySelector("[data-pl-raw='1']");
+  if (rawEl) {
+    const txt = (rawEl.value || "").trim() || "{}";
+    let parsed;
+    try { parsed = JSON.parse(txt); }
+    catch (err) { return { error: `JSON 语法错误：${err.message}` }; }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { error: "插件配置必须是一个 JSON 对象（例如 {}）。" };
+    }
+    return { config: parsed };
+  }
+
+  const schema = Array.isArray(plugin.settings_schema) ? plugin.settings_schema : [];
+  const schemaKeys = new Set(schema.map((f) => f.key));
+  const out = {};
+  // Preserve any extra keys not represented in schema
+  if (plugin.config && typeof plugin.config === "object") {
+    Object.entries(plugin.config).forEach(([k, v]) => {
+      if (!schemaKeys.has(k)) out[k] = v;
+    });
+  }
+  const controls = [...(form ? form.querySelectorAll("[data-pl-key]") : [])];
+  for (const ctl of controls) {
+    const key = ctl.dataset.plKey;
+    const ftype = ctl.dataset.plType;
+    if (ftype === "boolean") {
+      out[key] = Boolean(ctl.checked);
+    } else if (ftype === "number") {
+      const raw = (ctl.value || "").trim();
+      if (raw === "") continue;
+      const num = Number(raw);
+      if (Number.isNaN(num)) return { error: `字段 "${key}" 必须是数字` };
+      out[key] = num;
+    } else if (ftype === "json") {
+      const raw = (ctl.value || "").trim();
+      if (!raw) {
+        const spec = schema.find((f) => f.key === key);
+        out[key] = spec && spec.default !== undefined ? spec.default : {};
+      } else {
+        try { out[key] = JSON.parse(raw); }
+        catch (err) { return { error: `字段 "${key}" 的 JSON 格式无效：${err.message}` }; }
+      }
+    } else {
+      const raw = ctl.value;
+      if (raw !== "") out[key] = raw;
+    }
+  }
+  return { config: out };
+}
+
+function populateGeneralSettings(gen) {
+  const g = gen || {};
+  const savedTheme = (() => { try { return localStorage.getItem("codelet_theme"); } catch (_) { return null; } })();
+  if ($("st-gen-theme")) $("st-gen-theme").value = (savedTheme === "dark" || savedTheme === "light") ? savedTheme : "system";
+  if ($("st-gen-close") && g.close_behavior) $("st-gen-close").value = g.close_behavior;
+  if ($("st-gen-max-turns")) $("st-gen-max-turns").value = g.max_turns ?? 30;
+  if ($("st-gen-max-tokens")) $("st-gen-max-tokens").value = g.max_tokens ?? 8192;
+  if ($("st-gen-ctx-win")) $("st-gen-ctx-win").value = g.context_window ?? 200000;
+  if ($("st-gen-compact-ratio")) $("st-gen-compact-ratio").value = g.compact_threshold_ratio ?? 0.75;
+  if ($("st-gen-keep-recent")) $("st-gen-keep-recent").value = g.compact_keep_recent ?? 6;
+  if ($("st-gen-cache-ttl")) $("st-gen-cache-ttl").value = g.models_cache_ttl ?? 86400;
+  if ($("st-gen-auto-refresh")) $("st-gen-auto-refresh").checked = g.models_auto_refresh !== false;
+  setGeneralFeedback("");
+}
+
+function switchSettingsTab(tab, pluginName = null) {
+  const target = (tab === "general" || tab === "models" || tab === "plugins") ? tab : "general";
+  activeSettingsTab = target;
+  activeSettingsPlugin = target === "plugins" ? (pluginName || null) : null;
+
+  document.querySelectorAll(".st-nav-item[data-st-tab]").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.stTab === target);
+  });
+  document.querySelectorAll(".st-pane[data-st-pane]").forEach((pane) => {
+    pane.classList.toggle("hidden", pane.dataset.stPane !== target);
+  });
+
+  const titles = { general: "通用", models: "模型与接口", plugins: activeSettingsPlugin ? `插件 · ${activeSettingsPlugin}` : "插件" };
+  if ($("st-pane-title")) $("st-pane-title").textContent = titles[target] || "设置";
+
+  if (target === "plugins") {
+    if (activeSettingsPlugin) {
+      openPluginSettingsDetail(activeSettingsPlugin);
+    } else {
+      $("st-pl-detail")?.classList.add("hidden");
+      $("st-pl-overview")?.classList.remove("hidden");
+      renderSettingsPluginsOverview();
+    }
+  }
+  renderSettingsPluginsNav();
+  const scrollEl = document.querySelector(".st-main-scroll");
+  if (scrollEl) scrollEl.scrollTop = 0;
 }
 
 function renderSettingsModels() {
@@ -2376,9 +2720,111 @@ function collectSettingsModels() {
   return out;
 }
 
-function populateSettingsForm(prof) {
+function formatProfileDisplayName(name) {
+  return !name || name === "_env" ? "default" : name;
+}
+
+function matchBuiltinPresetKey(prof) {
+  if (!prof) return null;
+  const n = (prof.name || "").toLowerCase();
+  if (n && n !== "custom" && SETTINGS_PRESETS[n]) return n;
+  const url = (prof.base_url || "").toLowerCase();
+  if (url) {
+    for (const [k, p] of Object.entries(SETTINGS_PRESETS)) {
+      if (k === "custom" || !p.base_url) continue;
+      try {
+        if (new URL(p.base_url).host === new URL(url).host) return k;
+      } catch (_) {}
+    }
+  }
+  return null;
+}
+
+function initBuiltinPresetSelect() {
+  const sel = $("st-preset-select");
+  if (!sel || sel.options.length > 0) return;
+  Object.entries(SETTINGS_PRESETS).forEach(([k, p]) => {
+    if (k === "custom") return;
+    const opt = document.createElement("option");
+    opt.value = k;
+    opt.textContent = p.label || k;
+    sel.appendChild(opt);
+  });
+}
+
+function updateKeyEnvHint(configured, preview) {
+  const envName = ($("st-key-env")?.value || "").trim() || "LLM_API_KEY";
+  const inp = $("st-api-key");
+  if (inp) inp.placeholder = configured ? "留空保持当前密钥不变" : `留空使用环境认证 (${envName})`;
+  const hint = $("st-key-env-hint");
+  if (!hint) return;
+  if (settingsClearKeyPending) {
+    hint.textContent = `待清除已保存的密钥（点击保存后生效）。`;
+    hint.className = "st-env-hint warn";
+  } else if (configured) {
+    hint.textContent = `已检测到密钥 (${preview || "••••"})，可直接保存或留空保持不变。`;
+    hint.className = "st-env-hint ok";
+  } else {
+    hint.textContent = `未检测到环境变量。请填写 API 密钥，或设置环境变量 ${envName}。`;
+    hint.className = "st-env-hint warn";
+  }
+}
+
+function setEditorProviderMode(mode, { applyPreset = false } = {}) {
+  editorProviderMode = mode === "custom" ? "custom" : "builtin";
+  settingsRelaySelected = editorProviderMode === "custom";
+  document.querySelectorAll("#st-pmode-tabs .st-mode-tab").forEach((b) => {
+    b.classList.toggle("active", b.dataset.pmode === editorProviderMode);
+  });
+  const desc = $("st-pmode-desc");
+  if (desc) {
+    desc.textContent = editorProviderMode === "custom"
+      ? "接入任意 OpenAI 或 Anthropic 兼容的中转站、代理或本地推理服务，填写名称、Base URL 与 API 密钥即可。"
+      : "从内置目录中选择 OpenAI、Anthropic、DeepSeek、Kimi、ZenMux 等提供商，填入其 API 密钥即可使用。";
+  }
+  $("st-builtin-row")?.classList.toggle("hidden", editorProviderMode === "custom");
+  const adv = $("st-adv-details");
+  if (adv && editorProviderMode === "custom") adv.open = true;
+
+  if (applyPreset) {
+    if (editorProviderMode === "builtin") {
+      applyBuiltinPresetToForm($("st-preset-select")?.value || "openai");
+    } else {
+      const curName = ($("st-name")?.value || "").trim();
+      if (!curName || SETTINGS_PRESETS[curName]) $("st-name").value = "custom";
+      if (!$("st-key-env").value.trim() || Object.values(SETTINGS_PRESETS).some((p) => p.api_key_env === $("st-key-env").value.trim())) {
+        $("st-key-env").value = "LLM_API_KEY";
+      }
+      updateKeyEnvHint(false, "");
+    }
+  }
+}
+
+function applyBuiltinPresetToForm(presetKey) {
+  const p = SETTINGS_PRESETS[presetKey];
+  if (!p) return;
+  const existing = settingsState?.profiles?.[p.name];
+  if (existing && editingProfileName === "") {
+    populateSettingsForm(existing, { keepMode: true });
+    return;
+  }
+  $("st-name").value = p.name;
+  $("st-provider").value = p.provider;
+  $("st-base-url").value = p.base_url;
+  $("st-model").value = p.model;
+  $("st-key-env").value = p.api_key_env;
+  const isCfg = Boolean(existing && existing.api_key_configured);
+  const stEl = $("st-key-status");
+  if (stEl) {
+    stEl.textContent = isCfg ? `已配置 (${existing.api_key_preview || "••••"})` : "未配置";
+    stEl.className = "st-key-status mono " + (isCfg ? "ok" : "warn");
+  }
+  updateKeyEnvHint(isCfg, existing?.api_key_preview || "");
+}
+
+function populateSettingsForm(prof, { keepMode = false } = {}) {
+  initBuiltinPresetSelect();
   settingsClearKeyPending = false;
-  settingsRelaySelected = false;
   const p = prof || {};
   $("st-name").value = p.name && p.name !== "_env" ? p.name : "default";
   $("st-provider").value = p.provider === "anthropic" ? "anthropic" : "openai";
@@ -2402,38 +2848,156 @@ function populateSettingsForm(prof) {
     stEl.textContent = "未配置";
     stEl.className = "st-key-status mono warn";
   }
+  updateKeyEnvHint(Boolean(p.api_key_configured), p.api_key_preview || "");
+
+  if (!keepMode) {
+    const matched = matchBuiltinPresetKey(p);
+    if (matched) {
+      $("st-preset-select").value = matched;
+      setEditorProviderMode("builtin");
+      const adv = $("st-adv-details");
+      if (adv) adv.open = settingsModelsDraft.length > 0;
+    } else {
+      setEditorProviderMode("custom");
+    }
+  }
+
+  const canDel = Boolean(editingProfileName && editingProfileName !== "_env" && settingsState?.profiles?.[editingProfileName]);
+  $("st-prof-del")?.classList.toggle("hidden", !canDel);
   setSettingsFeedback("");
 }
 
-function renderSettingsProfiles(selectedName) {
-  const sel = $("st-prof-select");
-  sel.innerHTML = "";
+function openProviderEditor(profileName) {
+  initBuiltinPresetSelect();
   const profiles = (settingsState && settingsState.profiles) || {};
-  const names = Object.keys(profiles);
+  if (profileName && profiles[profileName]) {
+    editingProfileName = profileName;
+    populateSettingsForm(profiles[profileName]);
+  } else {
+    editingProfileName = "";
+    const firstUnused = Object.keys(SETTINGS_PRESETS).find((k) => k !== "custom" && !profiles[k]?.api_key_configured) || "openai";
+    $("st-preset-select").value = firstUnused;
+    populateSettingsForm({ ...SETTINGS_PRESETS[firstUnused], api_key_configured: false, models: [] });
+    setEditorProviderMode("builtin");
+    const adv = $("st-adv-details");
+    if (adv) adv.open = false;
+  }
+  const editor = $("st-prov-editor");
+  editor?.classList.remove("hidden");
+  $("st-prov-add")?.classList.toggle("hidden", editingProfileName === "");
+  renderSettingsProfiles();
+  if (editor) editor.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function closeProviderEditor() {
+  editingProfileName = null;
+  const editor = $("st-prov-editor");
+  const addBtn = $("st-prov-add");
+  if (editor && addBtn && addBtn.parentNode) {
+    addBtn.parentNode.insertBefore(editor, addBtn);
+  }
+  editor?.classList.add("hidden");
+  addBtn?.classList.remove("hidden");
+  setSettingsFeedback("");
+  renderSettingsProfiles();
+}
+
+async function activateProviderProfile(name) {
+  const p = settingsState?.profiles?.[name];
+  if (!p) return;
+  try {
+    const r = await (await fetch("/api/settings/apply", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        profile: name === "_env" ? "default" : name,
+        provider: p.provider || "openai",
+        base_url: p.base_url || "",
+        model: p.model || "",
+        api_key_env: p.api_key_env || "LLM_API_KEY",
+        models: Array.isArray(p.models) ? p.models : [],
+      }),
+    })).json();
+    if (r && r.ok) {
+      settingsState = r;
+      renderSettingsProfiles();
+      $("settings-dot")?.classList.toggle("hidden", !!r.api_key_configured);
+      $("st-nav-key-dot")?.classList.toggle("hidden", !!r.api_key_configured);
+      pushNotice(`已切换配置方案 "${formatProfileDisplayName(r.active_profile)}"`, "info");
+    }
+  } catch (_) {}
+}
+
+function renderSettingsProfiles() {
+  const listEl = $("st-prov-list");
+  if (!listEl) return;
+  const editor = $("st-prov-editor");
+  const addBtn = $("st-prov-add");
+  // Detach editor safely before clearing listEl so we never destroy its DOM/listeners
+  if (editor && editor.parentNode === listEl && addBtn && addBtn.parentNode) {
+    addBtn.parentNode.insertBefore(editor, addBtn);
+  }
+  listEl.innerHTML = "";
+  const profiles = (settingsState && settingsState.profiles) || {};
+  const active = settingsState?.active_profile || "";
+  // Only show configured providers (with API key) — hide unconfigured template entries
+  const names = Object.keys(profiles).filter((n) => {
+    const p = profiles[n];
+    return Boolean(p && p.api_key_configured) || n === editingProfileName;
+  });
+
   if (!names.length) {
-    const opt = document.createElement("option");
-    opt.value = "default"; opt.textContent = "default";
-    sel.appendChild(opt);
-    populateSettingsForm({ name: "default", provider: "openai", api_key_env: "LLM_API_KEY" });
+    listEl.appendChild(el("div", "st-hint", "暂未配置模型提供商，点击下方「+ 添加模型提供商」开始配置。"));
     return;
   }
+
+  // Put active profile first for clarity
+  names.sort((a, b) => (a === active ? -1 : b === active ? 1 : a.localeCompare(b)));
+
   names.forEach((n) => {
     const p = profiles[n];
-    const opt = document.createElement("option");
-    opt.value = n;
-    opt.textContent = `${n === "_env" ? "default (env)" : n} · ${p.provider}${p.api_key_configured ? " ✓" : ""}`;
-    sel.appendChild(opt);
+    const isActive = n === active;
+    const card = el("div", "st-prov-card" + (isActive ? " active" : ""));
+
+    const left = el("div", "st-prov-left");
+    left.appendChild(el("span", "st-prov-name", formatProfileDisplayName(n)));
+    left.appendChild(el("span", "st-prov-dot" + (p.api_key_configured ? " ok" : "")));
+    if (isActive && p.api_key_configured) {
+      left.appendChild(el("span", "st-prov-state", "当前使用"));
+    }
+
+    const acts = el("div", "st-prov-acts");
+    if (!isActive) {
+      const useBtn = el("button", "btn ghost sm", "使用");
+      useBtn.type = "button";
+      useBtn.addEventListener("click", () => activateProviderProfile(n));
+      acts.appendChild(useBtn);
+    }
+    const editBtn = el("button", "btn ghost sm", editingProfileName === n ? "收起" : "编辑");
+    editBtn.type = "button";
+    editBtn.addEventListener("click", () => {
+      if (editingProfileName === n) closeProviderEditor();
+      else openProviderEditor(n);
+    });
+    acts.appendChild(editBtn);
+
+    card.appendChild(left);
+    card.appendChild(acts);
+    listEl.appendChild(card);
+
+    // Mount the inline editor directly underneath the card being edited
+    if (editingProfileName === n && editor) {
+      listEl.appendChild(editor);
+    }
   });
-  const target = selectedName && profiles[selectedName] ? selectedName : (settingsState.active_profile || names[0]);
-  sel.value = target;
-  populateSettingsForm(profiles[target]);
 }
 
-async function openSettingsModal() {
+async function openSettingsModal(initialTab = null, pluginName = null) {
   $("settings-modal").classList.remove("hidden");
   setSettingsFeedback("");
+  setGeneralFeedback("");
+  setPluginFeedback("");
   const api = desktopApi();
-  const badge = $("st-vault-badge");
   const note = $("st-security-note");
   if (api && typeof api.getVaultInfo === "function") {
     try {
@@ -2444,54 +3008,221 @@ async function openSettingsModal() {
   } else {
     settingsVaultInfo = null;
   }
-  if (settingsVaultInfo && settingsVaultInfo.available) {
-    badge.textContent = settingsVaultInfo.storage === "dpapi" ? "🔒 Windows DPAPI 加密存储" : "🔒 系统钥匙串加密存储";
-    badge.className = "vault-badge secure";
-    note.textContent = "API Key 通过系统 DPAPI 加密存入本机凭据库，绝不以明文写入磁盘；非敏感配置保存至 ~/.codelet/settings.json。";
+  if (note) {
+    if (settingsVaultInfo && settingsVaultInfo.available) {
+      note.textContent = "API Key 通过系统 DPAPI 加密存入本机凭据库，绝不以明文写入磁盘；非敏感配置保存至 ~/.codelet/settings.json。";
+    } else {
+      note.textContent = "当前为浏览器模式：新输入的 API Key 仅保存在当前后端进程内存中（不写明文文件），非敏感配置保存至 ~/.codelet/settings.json。";
+    }
+  }
+
+  // Desktop-only action buttons (update check) & desktop closeBehavior sync
+  let desktopClosePref = null;
+  if (api && typeof api.getDesktopPrefs === "function") {
+    $("st-check-updates")?.classList.remove("hidden");
+    try {
+      const prefs = await api.getDesktopPrefs();
+      if (prefs && prefs.closeBehavior) desktopClosePref = prefs.closeBehavior;
+    } catch (_) {}
   } else {
-    badge.textContent = "内存会话 / 环境变量";
-    badge.className = "vault-badge";
-    note.textContent = "当前为浏览器模式：新输入的 API Key 仅保存在当前后端进程内存中（不写明文文件），非敏感配置保存至 ~/.codelet/settings.json。";
+    $("st-check-updates")?.classList.add("hidden");
   }
 
   const data = await safe("/api/settings");
   if (data) {
     settingsState = data;
-    renderSettingsProfiles(data.active_profile);
+    if (Array.isArray(data.plugins)) livePluginsCache = data.plugins;
+    closeProviderEditor();
+    populateGeneralSettings(data.general);
+    if (desktopClosePref && $("st-gen-close")) {
+      $("st-gen-close").value = desktopClosePref;
+    }
+    $("settings-dot")?.classList.toggle("hidden", !!data.api_key_configured);
+    $("st-nav-key-dot")?.classList.toggle("hidden", !!data.api_key_configured);
+    if (!data.api_key_configured) {
+      openProviderEditor(data.active_profile || null);
+    }
+    const chosenTab = (typeof initialTab === "string" && initialTab)
+      ? initialTab
+      : (!data.api_key_configured ? "models" : (activeSettingsTab || "general"));
+    switchSettingsTab(chosenTab, pluginName);
+  } else {
+    if (desktopClosePref && $("st-gen-close")) $("st-gen-close").value = desktopClosePref;
+    switchSettingsTab(typeof initialTab === "string" ? initialTab : (activeSettingsTab || "general"), pluginName);
   }
 }
 
-$("open-settings").addEventListener("click", openSettingsModal);
-$("st-cancel").addEventListener("click", () => $("settings-modal").classList.add("hidden"));
+$("open-settings")?.addEventListener("click", () => openSettingsModal());
+$("st-close-x")?.addEventListener("click", () => $("settings-modal").classList.add("hidden"));
+$("st-cancel")?.addEventListener("click", closeProviderEditor);
 $("settings-modal").addEventListener("click", (e) => { if (e.target === $("settings-modal")) $("settings-modal").classList.add("hidden"); });
 
-$("st-prof-select").addEventListener("change", () => {
-  const n = $("st-prof-select").value;
-  if (settingsState && settingsState.profiles && settingsState.profiles[n]) {
-    populateSettingsForm(settingsState.profiles[n]);
+document.querySelectorAll(".st-nav-item[data-st-tab]").forEach((btn) => {
+  btn.addEventListener("click", () => switchSettingsTab(btn.dataset.stTab, null));
+});
+
+$("st-gen-theme")?.addEventListener("change", () => {
+  const val = $("st-gen-theme").value;
+  try {
+    if (val === "light" || val === "dark") localStorage.setItem("codelet_theme", val);
+    else localStorage.removeItem("codelet_theme");
+  } catch (_) {}
+  applyTheme(val === "system" ? null : val);
+});
+
+$("st-gen-close")?.addEventListener("change", async () => {
+  const val = $("st-gen-close").value;
+  try {
+    const api = desktopApi();
+    if (api && typeof api.setDesktopPrefs === "function") {
+      await api.setDesktopPrefs({ closeBehavior: val });
+    }
+    const r = await (await fetch("/api/settings/general", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ close_behavior: val }),
+    })).json();
+    if (r && r.ok) {
+      settingsState = r;
+      setGeneralFeedback("✓ 已更新关闭主窗口行为（已写入通用设置）", "ok");
+    } else {
+      setGeneralFeedback("✕ " + ((r && r.error) || "保存失败"), "err");
+    }
+  } catch (err) {
+    setGeneralFeedback("更新失败: " + err.message, "err");
   }
 });
 
-$("st-prof-new").addEventListener("click", () => {
-  populateSettingsForm({
-    name: "custom",
-    provider: "openai",
-    base_url: "",
-    model: "",
-    api_key_env: "LLM_API_KEY",
-    api_key_configured: false,
-  });
-  $("st-name").focus();
-  $("st-name").select();
+$("st-check-updates")?.addEventListener("click", () => {
+  const api = desktopApi();
+  if (api && typeof api.checkForUpdates === "function") api.checkForUpdates();
 });
 
-$("st-prof-del").addEventListener("click", async () => {
-  const target = $("st-prof-select").value;
+$("st-gen-save")?.addEventListener("click", async () => {
+  const btn = $("st-gen-save");
+  btn.disabled = true;
+  setGeneralFeedback("正在保存通用设置…");
+  try {
+    const closeVal = $("st-gen-close") ? $("st-gen-close").value : "ask";
+    const api = desktopApi();
+    if (api && typeof api.setDesktopPrefs === "function") {
+      await api.setDesktopPrefs({ closeBehavior: closeVal });
+    }
+    const payload = {
+      close_behavior: closeVal,
+      max_turns: Number($("st-gen-max-turns").value),
+      max_tokens: Number($("st-gen-max-tokens").value),
+      context_window: Number($("st-gen-ctx-win").value),
+      compact_threshold_ratio: Number($("st-gen-compact-ratio").value),
+      compact_keep_recent: Number($("st-gen-keep-recent").value),
+      models_cache_ttl: Number($("st-gen-cache-ttl").value),
+      models_auto_refresh: Boolean($("st-gen-auto-refresh").checked),
+    };
+    const r = await (await fetch("/api/settings/general", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    })).json();
+    if (!r.ok) {
+      setGeneralFeedback("✕ " + (r.error || "保存失败"), "err");
+      return;
+    }
+    settingsState = r;
+    populateGeneralSettings(r.general);
+    setGeneralFeedback("✓ 通用设置已保存并立即生效", "ok");
+  } catch (err) {
+    setGeneralFeedback("✕ 保存请求失败: " + err.message, "err");
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+$("st-pl-back")?.addEventListener("click", () => switchSettingsTab("plugins", null));
+
+$("st-pl-denable")?.addEventListener("change", () => {
+  if (!activeSettingsPlugin) return;
+  const on = $("st-pl-denable").checked;
+  $("st-pl-denable-txt").textContent = on ? "已启用" : "未启用";
+  send({ type: "set_plugin_enabled", name: activeSettingsPlugin, enabled: on });
+});
+
+async function submitPluginConfig(name, config, okMessage) {
+  const saveBtn = $("st-pl-save");
+  const resetBtn = $("st-pl-reset");
+  if (saveBtn) saveBtn.disabled = true;
+  if (resetBtn) resetBtn.disabled = true;
+  setPluginFeedback("正在保存插件配置…");
+  try {
+    const r = await (await fetch("/api/settings/plugin", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, config }),
+    })).json();
+    if (!r.ok) {
+      setPluginFeedback("✕ " + (r.error || "保存失败"), "err");
+      return;
+    }
+    settingsState = r;
+    if (Array.isArray(r.plugins)) livePluginsCache = r.plugins;
+    renderSettingsPluginsNav();
+    openPluginSettingsDetail(name);
+    setPluginFeedback(
+      okMessage || (r.reloaded ? "✓ 插件设置已保存并热生效" : "✓ 插件设置已保存（启用该插件后生效）"),
+      "ok"
+    );
+  } catch (err) {
+    setPluginFeedback("✕ 保存失败: " + err.message, "err");
+  } finally {
+    if (saveBtn) saveBtn.disabled = false;
+    if (resetBtn) resetBtn.disabled = false;
+  }
+}
+
+$("st-pl-save")?.addEventListener("click", async () => {
+  if (!activeSettingsPlugin) return;
+  const plugin = getSettingsPlugins().find((x) => x.name === activeSettingsPlugin);
+  if (!plugin) return;
+  const collected = collectPluginSettingsForm(plugin);
+  if (collected.error) {
+    setPluginFeedback("✕ " + collected.error, "err");
+    return;
+  }
+  await submitPluginConfig(plugin.name, collected.config);
+});
+
+$("st-pl-reset")?.addEventListener("click", async () => {
+  if (!activeSettingsPlugin) return;
+  const ok = await askConfirm({
+    title: `恢复 "${activeSettingsPlugin}" 默认配置？`,
+    message: "将清除此插件在 ~/.codelet/settings.json 中的自定义参数并恢复为默认值。",
+    okText: "恢复默认",
+  });
+  if (!ok) return;
+  await submitPluginConfig(activeSettingsPlugin, {}, "✓ 已恢复默认配置");
+});
+
+$("st-prov-add")?.addEventListener("click", () => openProviderEditor(null));
+
+document.querySelectorAll("#st-pmode-tabs .st-mode-tab").forEach((btn) => {
+  btn.addEventListener("click", () => setEditorProviderMode(btn.dataset.pmode, { applyPreset: true }));
+});
+
+$("st-preset-select")?.addEventListener("change", () => {
+  applyBuiltinPresetToForm($("st-preset-select").value);
+});
+
+$("st-key-env")?.addEventListener("input", () => {
+  const cur = editingProfileName ? settingsState?.profiles?.[editingProfileName] : null;
+  updateKeyEnvHint(Boolean(cur && cur.api_key_configured && cur.api_key_env === $("st-key-env").value.trim()), cur?.api_key_preview || "");
+});
+
+$("st-prof-del")?.addEventListener("click", async () => {
+  const target = editingProfileName;
   if (!target || target === "_env") {
     setSettingsFeedback("当前默认环境变量方案不可删除。", "err");
     return;
   }
-  const ok = await askConfirm({ title: "删除配置方案？", message: `确定删除配置方案 "${target}" 吗？（不会自动删除其他方案共享的密钥）`, okText: "删除", danger: true });
+  const ok = await askConfirm({ title: "删除模型提供商？", message: `确定删除配置 "${formatProfileDisplayName(target)}" 吗？（不会自动删除其他方案共享的密钥）`, okText: "删除", danger: true });
   if (!ok) return;
   try {
     const r = await (await fetch("/api/settings/apply", {
@@ -2501,32 +3232,14 @@ $("st-prof-del").addEventListener("click", async () => {
     })).json();
     if (r.ok) {
       settingsState = r;
-      renderSettingsProfiles(r.active_profile);
-      setSettingsFeedback(`已删除配置方案 "${target}"`, "ok");
+      closeProviderEditor();
+      pushNotice(`已删除模型配置 "${formatProfileDisplayName(target)}"`, "info");
     } else {
       setSettingsFeedback(r.error || "删除失败", "err");
     }
   } catch (err) {
     setSettingsFeedback("请求失败: " + err.message, "err");
   }
-});
-
-document.querySelectorAll("#st-presets .st-preset").forEach((btn) => {
-  btn.addEventListener("click", () => {
-    const p = SETTINGS_PRESETS[btn.dataset.preset];
-    if (!p) return;
-    settingsRelaySelected = btn.dataset.preset === "custom";
-    $("st-name").value = p.name;
-    $("st-provider").value = p.provider;
-    $("st-base-url").value = p.base_url;
-    $("st-model").value = p.model;
-    $("st-key-env").value = p.api_key_env;
-    setSettingsFeedback(
-      settingsRelaySelected
-        ? "已选择自定义中转站模板：填好 Base URL、默认模型和 API Key 并保存后，可自动用该模型阅读中转站文档拉取全部可用模型。"
-        : `已填充 ${btn.textContent} 模板，请填写对应 API Key 后点击保存。`
-    );
-  });
 });
 
 $("st-add-model").addEventListener("click", () => {
@@ -2666,8 +3379,13 @@ $("disc-run").addEventListener("click", async () => {
 
     $("discover-modal").classList.add("hidden");
     $("settings-modal").classList.remove("hidden");
+    switchSettingsTab("models");
+    if (discoverContext.autoSave && discoverContext.profile) {
+      openProviderEditor(discoverContext.profile);
+    }
+    if ($("st-adv-details")) $("st-adv-details").open = true;
     setSettingsFeedback(
-      "✓ " + (r.message || `已发现 ${r.models.length} 个模型`) + (discoverContext.autoSave ? "，已自动写入模型目录（可继续微调显示名称后再次保存）。" : "，请核对显示名称后点击「保存并立即生效」。"),
+      "✓ " + (r.message || `已发现 ${r.models.length} 个模型`) + (discoverContext.autoSave ? "，已自动写入模型目录（可继续微调显示名称后再次保存）。" : "，请核对显示名称后点击「保存」。"),
       "ok"
     );
     $("st-models-list").scrollIntoView({ behavior: "smooth", block: "nearest" });
@@ -2691,6 +3409,7 @@ $("st-key-clear").addEventListener("click", () => {
   const stEl = $("st-key-status");
   stEl.textContent = "待清除（点击保存后生效）";
   stEl.className = "st-key-status mono warn";
+  updateKeyEnvHint(false, "");
 });
 
 $("st-test").addEventListener("click", async () => {
@@ -2780,12 +3499,12 @@ $("st-save").addEventListener("click", async () => {
     settingsState = r;
     settingsClearKeyPending = false;
     $("st-api-key").value = "";
-    renderSettingsProfiles(r.active_profile);
     if ($("settings-dot")) $("settings-dot").classList.toggle("hidden", !!r.api_key_configured);
-    setSettingsFeedback("✓ 配置已保存并立即生效", "ok");
-    pushNotice(`已切换配置方案 "${r.active_profile}" (${r.provider}${r.model ? " · " + r.model : ""})`, "info");
+    if ($("st-nav-key-dot")) $("st-nav-key-dot").classList.toggle("hidden", !!r.api_key_configured);
+    pushNotice(`已切换配置方案 "${formatProfileDisplayName(r.active_profile)}"${r.model ? " (" + r.model + ")" : ""}`, "info");
 
     if (shouldPromptRelayDiscover && r.api_key_configured) {
+      closeProviderEditor();
       $("settings-modal").classList.add("hidden");
       openDiscoverModal({
         profile: r.active_profile,
@@ -2797,7 +3516,7 @@ $("st-save").addEventListener("click", async () => {
         autoSave: true,
       });
     } else {
-      setTimeout(() => { $("settings-modal").classList.add("hidden"); }, 550);
+      closeProviderEditor();
     }
   } catch (err) {
     setSettingsFeedback("保存请求失败: " + err.message, "err");

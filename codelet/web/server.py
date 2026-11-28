@@ -1231,6 +1231,60 @@ class Connection:
             self._refresh_system_prompt()
         self.send({"type": "profile", **self._profile_data(snap)})
 
+    def apply_general_settings(self, new_settings: dict[str, Any]) -> None:
+        """Hot-apply updated general agent settings to this live connection."""
+        prev_plugins = self.settings.get("plugins")
+        self.settings = dict(new_settings)
+        if prev_plugins is not None:
+            self.settings["plugins"] = prev_plugins
+        cfg = self.agent.config
+        if new_settings.get("max_turns") is not None:
+            with contextlib.suppress(TypeError, ValueError):
+                cfg.max_turns = max(1, int(new_settings["max_turns"]))
+        if new_settings.get("max_tokens") is not None:
+            with contextlib.suppress(TypeError, ValueError):
+                cfg.max_tokens = max(256, int(new_settings["max_tokens"]))
+        if new_settings.get("context_window") is not None:
+            with contextlib.suppress(TypeError, ValueError):
+                cfg.context_window = max(4096, int(new_settings["context_window"]))
+        if new_settings.get("compact_threshold_ratio") is not None:
+            with contextlib.suppress(TypeError, ValueError):
+                cfg.compact_threshold_ratio = max(0.3, min(0.95, float(new_settings["compact_threshold_ratio"])))
+        if new_settings.get("compact_keep_recent") is not None:
+            with contextlib.suppress(TypeError, ValueError):
+                cfg.compact_keep_recent = max(1, int(new_settings["compact_keep_recent"]))
+        self.send({"type": "cockpit", **self._cockpit_snapshot()})
+
+    def apply_plugin_config(self, name: str, plugin_cfg: dict[str, Any]) -> bool:
+        """Update one plugin's config dict and hot-reload it in-place if active."""
+        plugins_cfg = self.settings.setdefault("plugins", {})
+        cfg_map = plugins_cfg.setdefault("config", {})
+        if plugin_cfg:
+            cfg_map[name] = dict(plugin_cfg)
+        else:
+            cfg_map.pop(name, None)
+        agent_cfg_map = self.agent.config.plugins.setdefault("config", {})
+        if plugin_cfg:
+            agent_cfg_map[name] = dict(plugin_cfg)
+        else:
+            agent_cfg_map.pop(name, None)
+
+        was_enabled = any(p["name"] == name and p["enabled"] for p in self.agent.plugins_state())
+        reloaded = False
+        if was_enabled and not self.busy:
+            self.agent.unmount_plugin(name)
+            ok, msg = self.agent.mount_plugin(name)
+            if not ok:
+                self.send({"type": "notice", "message": f"Reload {name}: {msg}", "level": "warn"})
+            reloaded = ok
+        self.send({"type": "plugins", "plugins": self.agent.plugins_state()})
+        self.send({"type": "tools", "tools": self.agent.tools_state()})
+        self.send({"type": "skills", "skills": self.agent.skills_state()})
+        self.send({"type": "commands", "commands": self._commands_data()})
+        self.send({"type": "panels", "panels": self.agent.panels_state()})
+        self.send({"type": "cockpit", **self._cockpit_snapshot()})
+        return reloaded
+
     def _profile_data(self, snap: CatalogSnapshot | None = None) -> dict[str, Any]:
         c = self.agent.config
         snap = snap if snap is not None else self._catalog_snapshot()
@@ -1660,6 +1714,17 @@ def create_app(
             "profiles": sorted((settings.get("profiles") or {}).keys()),
         }
 
+    def _plugins_settings_view() -> list[dict[str, Any]]:
+        for conn in list(connections):
+            return conn.agent.plugins_state()
+        from ..plugins.loader import apply_plugins, list_available_plugins
+        from ..tools.base import ToolRegistry
+        reg = ToolRegistry.default()
+        applied = None
+        with contextlib.suppress(Exception):
+            applied = apply_plugins(reg, settings.get("plugins") or {})
+        return list_available_plugins(settings.get("plugins") or {}, applied=applied)
+
     def _settings_view() -> dict[str, Any]:
         c = _default_config()
         prof_res = resolve_profile(settings, None)
@@ -1691,6 +1756,22 @@ def create_app(
                 "api_key_preview": _mask_secret(prof_res.get("api_key")),
                 "models": [],
             }
+        cb_raw = str(settings.get("close_behavior") or "ask").strip().lower()
+        close_behavior = cb_raw if cb_raw in ("ask", "tray", "quit") else "ask"
+        general_view = {
+            "close_behavior": close_behavior,
+            "max_turns": int(settings.get("max_turns") or c.max_turns),
+            "max_tokens": int(settings.get("max_tokens") or c.max_tokens),
+            "context_window": int(settings.get("context_window") or c.context_window),
+            "compact_threshold_ratio": float(
+                settings.get("compact_threshold_ratio")
+                if settings.get("compact_threshold_ratio") is not None
+                else c.compact_threshold_ratio
+            ),
+            "compact_keep_recent": int(settings.get("compact_keep_recent") or c.compact_keep_recent),
+            "models_auto_refresh": bool(settings.get("models_auto_refresh", True)),
+            "models_cache_ttl": int(resolve_ttl_seconds(settings)),
+        }
         return {
             "active_profile": active_name,
             "provider": c.provider.value,
@@ -1700,12 +1781,113 @@ def create_app(
             "api_key_configured": bool(c.api_key),
             "api_key_preview": _mask_secret(c.api_key),
             "profiles": profiles_out,
+            "general": general_view,
+            "plugins": _plugins_settings_view(),
             "desktop": bool(token),
         }
 
     @app.get("/api/settings")
     def api_get_settings() -> dict[str, Any]:
         return _settings_view()
+
+    @app.post("/api/settings/general")
+    async def api_apply_general_settings(request: Request) -> Any:
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"ok": False, "error": "Invalid JSON body"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"ok": False, "error": "Body must be an object"}, status_code=400)
+
+        user_raw = _read_user_settings_raw()
+        int_bounds = {
+            "max_turns": (1, 200),
+            "max_tokens": (256, 131072),
+            "context_window": (4096, 2_000_000),
+            "compact_keep_recent": (1, 50),
+        }
+        for k, (lo, hi) in int_bounds.items():
+            if k in body and body[k] not in (None, ""):
+                try:
+                    val = int(body[k])
+                except (TypeError, ValueError):
+                    return JSONResponse({"ok": False, "error": f"Invalid integer for {k}"}, status_code=400)
+                user_raw[k] = max(lo, min(hi, val))
+        ttl_raw = body.get("models_cache_ttl_seconds")
+        if ttl_raw in (None, ""):
+            ttl_raw = body.get("models_cache_ttl")
+        if ttl_raw not in (None, ""):
+            try:
+                ttl_val = int(ttl_raw)
+            except (TypeError, ValueError):
+                return JSONResponse({"ok": False, "error": "Invalid integer for models_cache_ttl"}, status_code=400)
+            user_raw["models_cache_ttl_seconds"] = max(60, min(604800, ttl_val))
+        if "compact_threshold_ratio" in body and body["compact_threshold_ratio"] not in (None, ""):
+            try:
+                ratio = float(body["compact_threshold_ratio"])
+            except (TypeError, ValueError):
+                return JSONResponse({"ok": False, "error": "Invalid compact_threshold_ratio"}, status_code=400)
+            user_raw["compact_threshold_ratio"] = round(max(0.3, min(0.95, ratio)), 2)
+        if "models_auto_refresh" in body:
+            user_raw["models_auto_refresh"] = bool(body["models_auto_refresh"])
+        if "close_behavior" in body and body["close_behavior"] not in (None, ""):
+            cb_val = str(body["close_behavior"]).strip().lower()
+            if cb_val not in ("ask", "tray", "quit"):
+                return JSONResponse({"ok": False, "error": f"Invalid close_behavior: {cb_val}"}, status_code=400)
+            user_raw["close_behavior"] = cb_val
+
+        _write_user_settings_raw(user_raw)
+        fresh = load_settings(user_path=_user_settings_file())
+        settings.clear()
+        settings.update(fresh)
+        app.state.settings = settings
+        model_catalog.ttl_seconds = resolve_ttl_seconds(settings)
+
+        for conn in list(connections):
+            conn.apply_general_settings(settings)
+
+        return {"ok": True, **_settings_view()}
+
+    @app.post("/api/settings/plugin")
+    async def api_apply_plugin_settings(request: Request) -> Any:
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"ok": False, "error": "Invalid JSON body"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"ok": False, "error": "Body must be an object"}, status_code=400)
+
+        name = str(body.get("name") or "").strip()
+        if not name:
+            return JSONResponse({"ok": False, "error": "Plugin name is required"}, status_code=400)
+        raw_cfg = body.get("config")
+        if raw_cfg is None:
+            raw_cfg = {}
+        if not isinstance(raw_cfg, dict):
+            return JSONResponse({"ok": False, "error": "Plugin config must be a JSON object"}, status_code=400)
+
+        user_raw = _read_user_settings_raw()
+        u_plugins = dict(user_raw.get("plugins") or {}) if isinstance(user_raw.get("plugins"), dict) else {}
+        u_cfg_map = dict(u_plugins.get("config") or {}) if isinstance(u_plugins.get("config"), dict) else {}
+        if raw_cfg:
+            u_cfg_map[name] = dict(raw_cfg)
+        else:
+            u_cfg_map.pop(name, None)
+        u_plugins["config"] = u_cfg_map
+        user_raw["plugins"] = u_plugins
+        _write_user_settings_raw(user_raw)
+
+        fresh = load_settings(user_path=_user_settings_file())
+        settings.clear()
+        settings.update(fresh)
+        app.state.settings = settings
+
+        reloaded_any = False
+        for conn in list(connections):
+            if conn.apply_plugin_config(name, raw_cfg):
+                reloaded_any = True
+
+        return {"ok": True, "reloaded": reloaded_any, **_settings_view()}
 
     @app.post("/api/settings/apply")
     async def api_apply_settings(request: Request) -> Any:

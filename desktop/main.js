@@ -17,6 +17,7 @@ let tray = null;
 let backend = null;
 let vault = null;
 let backendOrigin = "";
+let closeDialogOpen = false;
 
 function extractWorkspaceArg(argv) {
   if (!Array.isArray(argv)) return "";
@@ -131,6 +132,40 @@ async function quitApp() {
   app.quit();
 }
 
+function userSettingsPath() {
+  return path.join(os.homedir(), ".codelet", "settings.json");
+}
+
+function getCloseBehavior() {
+  try {
+    const p = userSettingsPath();
+    if (fs.existsSync(p)) {
+      const raw = JSON.parse(fs.readFileSync(p, "utf8"));
+      const cb = typeof raw?.close_behavior === "string" ? raw.close_behavior.trim().toLowerCase() : "";
+      if (cb === "ask" || cb === "tray" || cb === "quit") return cb;
+    }
+  } catch (_) {}
+  const st = loadState();
+  const cb = typeof st.closeBehavior === "string" ? st.closeBehavior.trim().toLowerCase() : "";
+  return cb === "tray" || cb === "quit" || cb === "ask" ? cb : "ask";
+}
+
+function persistCloseBehavior(cb) {
+  if (cb !== "ask" && cb !== "tray" && cb !== "quit") return;
+  saveState({ closeBehavior: cb });
+  try {
+    const p = userSettingsPath();
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    let raw = {};
+    if (fs.existsSync(p)) {
+      const parsed = JSON.parse(fs.readFileSync(p, "utf8"));
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) raw = parsed;
+    }
+    raw.close_behavior = cb;
+    fs.writeFileSync(p, JSON.stringify(raw, null, 2) + "\n", "utf8");
+  } catch (_) {}
+}
+
 function registerIpc() {
   ipcMain.handle("desktop:pick-workspace", async (_event, defaultPath) => {
     const startDir =
@@ -215,6 +250,23 @@ function registerIpc() {
   ipcMain.handle("desktop:check-updates", () => checkForUpdates(app, { manual: true }));
   ipcMain.handle("desktop:install-update", () => installDownloadedUpdate());
 
+  ipcMain.handle("desktop:get-prefs", () => ({
+    closeBehavior: getCloseBehavior(),
+  }));
+
+  ipcMain.handle("desktop:set-prefs", (_event, patch) => {
+    if (patch && typeof patch.closeBehavior === "string") {
+      const cb = patch.closeBehavior.trim().toLowerCase();
+      if (cb === "ask" || cb === "tray" || cb === "quit") {
+        persistCloseBehavior(cb);
+      }
+    }
+    return {
+      ok: true,
+      closeBehavior: getCloseBehavior(),
+    };
+  });
+
   ipcMain.handle("desktop:vault-info", () => {
     const available = vault ? vault.isAvailable() : false;
     return {
@@ -277,12 +329,8 @@ function createWindow() {
     if (isSafeHttpUrl(url)) shell.openExternal(url);
   });
 
-  mainWindow.on("close", (event) => {
-    if (isQuitting) return;
-    event.preventDefault();
-    const maximized = mainWindow.isMaximized();
-    const b = maximized ? mainWindow.getNormalBounds() : mainWindow.getBounds();
-    saveState({ bounds: { ...b, maximized }, lastWorkspace: currentWorkspace });
+  function hideToTray() {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
     mainWindow.hide();
     if (!trayTipShown && tray && process.platform === "win32") {
       trayTipShown = true;
@@ -294,6 +342,49 @@ function createWindow() {
         });
       } catch (_) {}
     }
+  }
+
+  mainWindow.on("close", (event) => {
+    if (isQuitting) return;
+    event.preventDefault();
+    const maximized = mainWindow.isMaximized();
+    const b = maximized ? mainWindow.getNormalBounds() : mainWindow.getBounds();
+    saveState({ bounds: { ...b, maximized }, lastWorkspace: currentWorkspace });
+
+    const behavior = getCloseBehavior();
+    if (behavior === "tray") {
+      hideToTray();
+      return;
+    }
+    if (behavior === "quit") {
+      quitApp();
+      return;
+    }
+
+    if (closeDialogOpen) return;
+    closeDialogOpen = true;
+    dialog.showMessageBox(mainWindow, {
+      type: "question",
+      title: "关闭 codelet",
+      message: "关闭窗口时希望如何处理？",
+      detail: "最小化到系统托盘可保持后台常驻以便秒开；你随时可以在「设置 → 通用」中更改此行为。",
+      buttons: ["最小化到托盘", "直接退出", "取消"],
+      defaultId: 0,
+      cancelId: 2,
+      checkboxLabel: "记住我的选择（以后不再提示）",
+      checkboxChecked: false,
+    }).then((res) => {
+      closeDialogOpen = false;
+      if (res.response === 0) {
+        if (res.checkboxChecked) persistCloseBehavior("tray");
+        hideToTray();
+      } else if (res.response === 1) {
+        if (res.checkboxChecked) persistCloseBehavior("quit");
+        quitApp();
+      }
+    }).catch(() => {
+      closeDialogOpen = false;
+    });
   });
 
   mainWindow.loadFile(path.join(__dirname, "splash.html"));
