@@ -671,6 +671,7 @@ def test_settings_general_and_plugin_config_endpoints(tmp_path, monkeypatch):
         r_gen = client.post(
             "/api/settings/general",
             json={
+                "language": "en",
                 "close_behavior": "quit",
                 "max_turns": 45,
                 "max_tokens": 16384,
@@ -684,6 +685,8 @@ def test_settings_general_and_plugin_config_endpoints(tmp_path, monkeypatch):
         assert r_gen.status_code == 200
         gen_body = r_gen.json()
         assert gen_body["ok"] is True
+        assert gen_body["version"]
+        assert gen_body["general"]["language"] == "en"
         assert gen_body["general"]["close_behavior"] == "quit"
         assert gen_body["general"]["max_turns"] == 45
         assert gen_body["general"]["max_tokens"] == 16384
@@ -694,6 +697,7 @@ def test_settings_general_and_plugin_config_endpoints(tmp_path, monkeypatch):
         assert gen_body["general"]["models_cache_ttl"] == 3600
 
         saved = json.loads(fake_settings.read_text(encoding="utf-8"))
+        assert saved["language"] == "en"
         assert saved["close_behavior"] == "quit"
         assert saved["max_turns"] == 45
         assert saved["models_cache_ttl_seconds"] == 3600
@@ -755,6 +759,36 @@ def test_custom_plugin_settings_schema_discovered_in_settings_view(tmp_path, mon
     assert entry["builtin"] is False
     assert [f["key"] for f in entry["settings_schema"]] == ["endpoint", "retries"]
     assert entry["config"] == {"retries": 7}
+
+
+def test_gen_release_notes_categorizes_english_changes():
+    import importlib.util
+    from pathlib import Path
+
+    script = Path(__file__).resolve().parents[1] / "desktop" / "scripts" / "gen-release-notes.py"
+    spec = importlib.util.spec_from_file_location("gen_release_notes", script)
+    mod = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(mod)
+
+    commits = [
+        ("e65c091", "feat(settings): add About tab and language switcher"),
+        ("e4f5a2b", "fix(llm): parse nested prompt_tokens_details cache write fields"),
+        ("1234abc", "refactor(ui): simplify provider card layout"),
+        ("8d1e6f9", "test: isolate global SESSION_DIR via conftest"),
+    ]
+    md = mod.build_release_notes("v0.1.4", "v0.1.3", commits)
+    assert "## What's Changed in v0.1.4" in md
+    assert "### ✨ New Features" in md
+    assert "**settings**: Add About tab and language switcher (`e65c091`)" in md
+    assert "### 🐛 Bug Fixes" in md
+    assert "**llm**: Parse nested prompt_tokens_details cache write fields (`e4f5a2b`)" in md
+    assert "### ⚡ Improvements" in md
+    assert "**ui**: Simplify provider card layout (`1234abc`)" in md
+    assert "### 📝 Docs & Tests" in md
+    assert "### 📦 Downloads" in md
+    assert "**Full Changelog**: https://github.com/muamuauh/codelet/compare/v0.1.3...v0.1.4" in md
+
 
 
 
