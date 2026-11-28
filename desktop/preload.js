@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld("codeletDesktop", {
   quitApp: () => ipcRenderer.invoke("desktop:quit"),
   getVersion: () => ipcRenderer.invoke("desktop:version"),
   checkForUpdates: () => ipcRenderer.invoke("desktop:check-updates"),
+  installUpdate: () => ipcRenderer.invoke("desktop:install-update"),
   getVaultInfo: () => ipcRenderer.invoke("desktop:vault-info"),
   saveSecret: (name, value) =>
     ipcRenderer.invoke("desktop:save-secret", {

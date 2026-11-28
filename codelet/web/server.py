@@ -780,19 +780,23 @@ class Connection:
 
     def _cockpit_snapshot(self, balance_view: dict[str, Any] | None = None) -> dict[str, Any]:
         rt = getattr(self.agent, "_cockpit", None)
+        sid = self.store.id if self.store is not None else ""
         if rt is None:
-            return {"enabled": False}
-        return rt.snapshot(balance_view=balance_view)
+            return {"enabled": False, "session_id": sid, "viewing_history": False}
+        snap = rt.snapshot(balance_view=balance_view)
+        snap["session_id"] = sid
+        snap["viewing_history"] = False
+        return snap
 
     async def _send_cockpit(self, *, force_balance: bool = False) -> None:
         rt = getattr(self.agent, "_cockpit", None)
         if rt is None:
-            self.send({"type": "cockpit", "enabled": False})
+            self.send({"type": "cockpit", **self._cockpit_snapshot()})
             return
         bal = None
         if force_balance:
             bal = await rt.balance.aget(self.agent.config.base_url, force=True)
-        self.send({"type": "cockpit", **rt.snapshot(balance_view=bal)})
+        self.send({"type": "cockpit", **self._cockpit_snapshot(balance_view=bal)})
 
     async def _on_install_skill(self, args: str) -> None:
         from ..skills.installer import fetch_remote_skill, install_fetched_skill, parse_install_args
@@ -1196,6 +1200,7 @@ class Connection:
         self.store = SessionStore(session_id=session_id, project_dir=Path.cwd() / ".codelet")
         self.send({"type": "resumed", "id": session_id,
                    "messages": _transcript(self.agent.context.messages)})
+        self.send({"type": "cockpit", **self._cockpit_snapshot()})
 
     def reload_settings(self, new_settings: dict[str, Any], *, force_model: str | None = None) -> None:
         """Hot-apply updated profile/API settings without losing current conversation."""
@@ -2250,6 +2255,9 @@ def create_app(
     def api_cockpit(session_id: str = "") -> dict[str, Any]:
         sid = (session_id or "").strip()
         if sid and sid != "__live__":
+            for conn in list(connections):
+                if conn.store is not None and conn.store.id == sid:
+                    return conn._cockpit_snapshot()
             from ..context import ConversationContext
             from ..plugins.builtin.cockpit import CockpitStore
             try:

@@ -746,6 +746,24 @@
     </div>
   </div>
 
+  <!-- desktop auto-update progress toast -->
+  <div id="update-toast" class="update-toast hidden" role="status" aria-live="polite">
+    <div class="ut-head">
+      <span class="ut-dot"></span>
+      <span id="ut-title" class="ut-title">正在下载更新…</span>
+      <span id="ut-pct" class="ut-pct mono">0%</span>
+      <button id="ut-close" class="ut-close" type="button" title="隐藏" aria-label="Close">×</button>
+    </div>
+    <div class="ut-bar"><div id="ut-fill" class="ut-fill"></div></div>
+    <div class="ut-foot">
+      <span id="ut-detail" class="ut-detail mono">准备下载…</span>
+      <div class="ut-acts">
+        <button id="ut-install" class="btn primary sm hidden" type="button">立即重启安装</button>
+        <button id="ut-releases" class="btn ghost sm hidden" type="button">打开发布页</button>
+      </div>
+    </div>
+  </div>
+
   <script src="/static/app.js"></script>
 </body>
 </html>

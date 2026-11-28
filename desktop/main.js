@@ -7,7 +7,7 @@ const { app, BrowserWindow, dialog, ipcMain, screen, shell } = require("electron
 const { BackendManager } = require("./backend");
 const { SecretVault } = require("./secrets");
 const { createAppTray } = require("./tray");
-const { setupAutoUpdater, checkForUpdates } = require("./updater");
+const { setupAutoUpdater, checkForUpdates, installDownloadedUpdate } = require("./updater");
 
 const STATE_FILE = () => path.join(app.getPath("userData"), "desktop-state.json");
 const REPO_ROOT = path.resolve(__dirname, "..");
@@ -213,6 +213,7 @@ function registerIpc() {
 
   ipcMain.handle("desktop:version", () => app.getVersion());
   ipcMain.handle("desktop:check-updates", () => checkForUpdates(app, { manual: true }));
+  ipcMain.handle("desktop:install-update", () => installDownloadedUpdate());
 
   ipcMain.handle("desktop:vault-info", () => {
     const available = vault ? vault.isAvailable() : false;
@@ -381,6 +382,12 @@ if (!gotLock) {
     setupAutoUpdater({
       app,
       getMainWindow: () => mainWindow,
+      getTray: () => tray,
+      onStatus: (status) => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send("desktop:action", { type: "update-status", ...status });
+        }
+      },
       beforeQuitAndInstall: async () => {
         isQuitting = true;
         if (tray) {

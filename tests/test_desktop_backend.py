@@ -591,3 +591,53 @@ def test_transcript_groups_multi_step_tools_and_thinking_before_final_answer():
     assert asst["steps"][3]["name"] == "bash"
     assert asst["steps"][3]["output"] == "354 passed"
 
+
+def test_cockpit_recognizes_active_resumed_session_as_live(tmp_path, monkeypatch):
+    import json
+
+    sessions_dir = tmp_path / "sessions"
+    sessions_dir.mkdir()
+    sid = "sess-main-live"
+    (sessions_dir / f"{sid}.json").write_text(json.dumps({
+        "id": sid,
+        "workspace": str(tmp_path),
+        "summary": "main",
+        "system_prompt": "You are codelet.",
+        "permission_mode": "ask",
+        "messages": [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "hi there"},
+        ],
+        "telemetry": {"input_tokens": 500, "output_tokens": 120, "cost_usd": 0.005, "calls": 1},
+    }), encoding="utf-8")
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("codelet.persistence.session.SESSION_DIR", sessions_dir)
+    monkeypatch.setattr("codelet.web.server._workspace_states_file", lambda: tmp_path / "workspace_states.json")
+    monkeypatch.setattr("codelet.web.server._user_settings_file", lambda: tmp_path / "settings.json")
+
+    app = create_app(auto_refresh=False)
+    client = TestClient(app)
+
+    with client.websocket_connect("/ws") as ws:
+        # Drain initial handshake frames
+        for _ in range(8):
+            ws.receive_json()
+
+        # Resume `main` -> should emit resumed + live cockpit frame with session_id == sid
+        ws.send_json({"type": "resume", "id": sid})
+        f1 = ws.receive_json()
+        assert f1["type"] == "resumed" and f1["id"] == sid
+        f2 = ws.receive_json()
+        assert f2["type"] == "cockpit"
+        assert f2["session_id"] == sid
+        assert f2["viewing_history"] is False
+
+        # Querying /api/cockpit?session_id=<sid> while active MUST return live (not viewing_history)
+        r = client.get(f"/api/cockpit?session_id={sid}")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["session_id"] == sid
+        assert body["viewing_history"] is False
+
+

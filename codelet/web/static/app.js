@@ -413,7 +413,11 @@ function render(ev) {
   switch (ev.type) {
     case "profile": return onProfile(ev);
     case "workspace": return onWorkspace(ev);
-    case "cleared": transcript.innerHTML = ""; current = null; toggleEmpty(); return;
+    case "cleared":
+      transcript.innerHTML = ""; current = null; activeSession = null;
+      cockpitViewSession = "__live__";
+      toggleEmpty(); highlight(); renderCockpitToolbar();
+      return;
     case "sessions_changed": return loadSessions();
     case "tools": return renderToolsList(ev.tools);
     case "skills": return renderSkillsList(ev.skills);
@@ -708,6 +712,16 @@ let cockpitSessionGroups = [];
 let cockpitPollTimer = null;
 
 function onCockpit(ev, { fromHistory = false } = {}) {
+  if (!fromHistory && !ev?.viewing_history && ev?.session_id) {
+    const changed = activeSession !== ev.session_id;
+    activeSession = ev.session_id;
+    if (cockpitViewSession === activeSession) cockpitViewSession = "__live__";
+    if (changed) { highlight(); renderCockpitToolbar(); }
+  }
+  if (fromHistory && ev && ev.viewing_history === false) {
+    cockpitViewSession = "__live__";
+    renderCockpitToolbar();
+  }
   if (!fromHistory && cockpitViewSession !== "__live__") return;
   cockpitData = ev;
   const enabled = ev && ev.enabled !== false;
@@ -716,7 +730,7 @@ function onCockpit(ev, { fromHistory = false } = {}) {
   $("ctx-pill").classList.toggle("hidden", !enabled);
   const histBanner = $("ckHistBanner");
   if (histBanner) {
-    const isHist = Boolean(ev && ev.viewing_history);
+    const isHist = Boolean(ev && ev.viewing_history && (!activeSession || ev.session_id !== activeSession));
     histBanner.classList.toggle("hidden", !isHist);
     if (isHist) $("ckHistLabel").textContent = `历史会话：${ev.session_title || ev.session_id || ""}`;
   }
@@ -912,11 +926,27 @@ function renderCockpitToolbar() {
   projSel.value = validProj;
 
   const curWsName = ($("ws-name")?.textContent || "").trim();
-  const prevSess = cockpitViewSession;
+  const prevSess = (activeSession && cockpitViewSession === activeSession) ? "__live__" : cockpitViewSession;
+  cockpitViewSession = prevSess;
   sessSel.innerHTML = "";
+
+  // Locate activeSession in the grouped session list so we never render duplicate entries
+  let activeEntry = null, activeGroup = null;
+  if (activeSession) {
+    for (const g of allGroups) {
+      const hit = (g.sessions || []).find((r) => r.id === activeSession);
+      if (hit) { activeEntry = hit; activeGroup = g; break; }
+    }
+  }
+  const showProjSuffix = validProj === "__all__";
   const liveOpt = document.createElement("option");
   liveOpt.value = "__live__";
-  liveOpt.textContent = curWsName && curWsName !== "—" ? `当前对话 (${curWsName})` : "当前对话";
+  if (activeEntry) {
+    const activeTitle = (activeEntry.title || activeEntry.summary || activeEntry.id).slice(0, 28);
+    liveOpt.textContent = (showProjSuffix && activeGroup?.name) ? `${activeTitle} (${activeGroup.name})` : activeTitle;
+  } else {
+    liveOpt.textContent = (showProjSuffix && curWsName && curWsName !== "—") ? `当前对话 (${curWsName})` : "当前对话";
+  }
   sessSel.appendChild(liveOpt);
 
   const visibleGroups = validProj === "__all__"
@@ -924,10 +954,11 @@ function renderCockpitToolbar() {
     : allGroups.filter((g) => (g.workspace || "__other__") === validProj);
   visibleGroups.forEach((g) => {
     (g.sessions || []).forEach((r) => {
+      if (activeSession && r.id === activeSession) return;
       const o = document.createElement("option");
       o.value = r.id;
       const title = (r.title || r.summary || r.id).slice(0, 28);
-      o.textContent = `${title}${g.name ? " (" + g.name + ")" : ""}`;
+      o.textContent = (showProjSuffix && g.name) ? `${title} (${g.name})` : title;
       sessSel.appendChild(o);
     });
   });
@@ -1472,6 +1503,8 @@ function onWorkspace(ev) {
 }
 function onResumed(ev) {
   transcript.innerHTML = ""; current = null;
+  if (ev.id) activeSession = ev.id;
+  cockpitViewSession = "__live__";
   (ev.messages || []).forEach((m) => {
     const b = addMessage(m.role);
     b.finalized = true;
@@ -1509,7 +1542,7 @@ function onResumed(ev) {
       b.bubble.textContent = b.text;
     }
   });
-  current = null; toggleEmpty(); scroll(true);
+  current = null; toggleEmpty(); highlight(); renderCockpitToolbar(); scroll(true);
 }
 
 // ---------- confirm & diff modals ----------
@@ -2162,10 +2195,74 @@ $("quit").addEventListener("click", async () => {
         else if (payload.type === "pick-workspace") openWorkspacePicker();
         else if (payload.type === "open-settings") openSettingsModal();
         else if (payload.type === "open-workspace" && payload.path) send({ type: "set_workspace", path: payload.path });
+        else if (payload.type === "update-status") onUpdateStatus(payload);
       });
     }
   }
 }
+
+function fmtBytes(n) {
+  const b = Number(n || 0);
+  if (b >= 1024 * 1024) return (b / (1024 * 1024)).toFixed(1) + " MB";
+  if (b >= 1024) return (b / 1024).toFixed(0) + " KB";
+  return Math.round(b) + " B";
+}
+function onUpdateStatus(ev) {
+  const box = $("update-toast");
+  if (!box) return;
+  const ver = ev.version || "新版本";
+  const titleEl = $("ut-title");
+  const pctEl = $("ut-pct");
+  const fillEl = $("ut-fill");
+  const detEl = $("ut-detail");
+  const instBtn = $("ut-install");
+  const relBtn = $("ut-releases");
+
+  box.classList.remove("hidden", "done", "err", "indeterminate");
+  instBtn.classList.add("hidden");
+  relBtn.classList.add("hidden");
+
+  if (ev.state === "downloading") {
+    const pct = Math.max(0, Math.min(100, Number(ev.percent || 0)));
+    const total = Number(ev.total || 0);
+    const transferred = Number(ev.transferred || 0);
+    const bps = Number(ev.bytesPerSecond || 0);
+    titleEl.textContent = `正在下载更新 ${ver}`;
+    if (total > 0) {
+      pctEl.textContent = `${Math.round(pct)}%`;
+      fillEl.style.width = `${pct.toFixed(1)}%`;
+      detEl.textContent = `${fmtBytes(transferred)} / ${fmtBytes(total)}${bps > 0 ? " · " + fmtBytes(bps) + "/s" : ""}`;
+    } else {
+      box.classList.add("indeterminate");
+      pctEl.textContent = "…";
+      detEl.textContent = "正在连接 GitHub Releases 获取更新包…";
+    }
+  } else if (ev.state === "downloaded") {
+    box.classList.add("done");
+    titleEl.textContent = `更新 ${ver} 已下载完成`;
+    pctEl.textContent = "100%";
+    fillEl.style.width = "100%";
+    detEl.textContent = "点击右侧按钮立即重启并安装";
+    instBtn.classList.remove("hidden");
+  } else if (ev.state === "error") {
+    box.classList.add("err");
+    titleEl.textContent = `更新 ${ver} 下载失败`;
+    pctEl.textContent = "失败";
+    detEl.textContent = ev.message || "网络异常，可手动前往发布页下载";
+    relBtn.classList.remove("hidden");
+  }
+}
+$("ut-close")?.addEventListener("click", () => $("update-toast")?.classList.add("hidden"));
+$("ut-install")?.addEventListener("click", () => {
+  const api = desktopApi();
+  if (api && typeof api.installUpdate === "function") api.installUpdate();
+});
+$("ut-releases")?.addEventListener("click", () => {
+  const api = desktopApi();
+  const url = "https://github.com/muamuauh/codelet/releases";
+  if (api && typeof api.openExternal === "function") api.openExternal(url);
+  else window.open(url, "_blank", "noopener");
+});
 
 // ---------- API & Model Settings Modal (with Desktop DPAPI vault) ----------
 const SETTINGS_PRESETS = {

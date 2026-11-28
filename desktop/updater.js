@@ -7,7 +7,12 @@ const RELEASES_URL = "https://github.com/muamuauh/codelet/releases";
 let updater = null;
 let initialized = false;
 let manualCheckPending = false;
+let isDownloading = false;
+let downloadedVersion = "";
+let targetVersion = "";
 let getParentWindow = () => null;
+let getAppTray = () => null;
+let emitStatus = () => {};
 let requestAppQuitForInstall = null;
 
 function _loadUpdater() {
@@ -20,8 +25,34 @@ function _loadUpdater() {
   return updater;
 }
 
-function setupAutoUpdater({ app, getMainWindow, beforeQuitAndInstall }) {
+function _setProgress(fraction, tooltipText) {
+  const win = getParentWindow();
+  if (win && !win.isDestroyed() && typeof win.setProgressBar === "function") {
+    try { win.setProgressBar(fraction); } catch (_) {}
+  }
+  const tr = getAppTray();
+  if (tr && !tr.isDestroyed() && typeof tr.setToolTip === "function") {
+    try {
+      tr.setToolTip(tooltipText || "codelet — Local AI Coding Workbench");
+    } catch (_) {}
+  }
+}
+
+async function installDownloadedUpdate() {
+  const au = _loadUpdater();
+  if (!au || !downloadedVersion) return { ok: false, reason: "not-downloaded" };
+  _setProgress(-1);
+  if (typeof requestAppQuitForInstall === "function") {
+    await requestAppQuitForInstall();
+  }
+  au.quitAndInstall(false, true);
+  return { ok: true };
+}
+
+function setupAutoUpdater({ app, getMainWindow, getTray, onStatus, beforeQuitAndInstall }) {
   getParentWindow = getMainWindow;
+  getAppTray = typeof getTray === "function" ? getTray : () => null;
+  emitStatus = typeof onStatus === "function" ? onStatus : () => {};
   requestAppQuitForInstall = beforeQuitAndInstall;
 
   if (!app.isPackaged) return;
@@ -34,37 +65,68 @@ function setupAutoUpdater({ app, getMainWindow, beforeQuitAndInstall }) {
   au.allowPrerelease = false;
 
   au.on("update-available", async (info) => {
-    const isManual = manualCheckPending;
     manualCheckPending = false;
     const ver = info && info.version ? `v${info.version}` : "新版本";
+    targetVersion = ver;
     const win = getParentWindow();
+    if (isDownloading) {
+      if (win && !win.isDestroyed()) win.show();
+      return;
+    }
     const res = await dialog.showMessageBox(win || undefined, {
       type: "info",
       title: "发现 codelet 新版本",
       message: `发现新版本 ${ver}（当前 v${app.getVersion()}）`,
-      detail: "是否立即下载更新包？下载完成后可一键重启安装。",
+      detail: "是否立即下载更新包？下载进度将在应用右下角和任务栏实时显示。",
       buttons: ["立即下载", "打开发布页", "稍后"],
       defaultId: 0,
       cancelId: 2,
     });
     if (res.response === 0) {
+      isDownloading = true;
+      downloadedVersion = "";
+      _setProgress(2, `codelet — 正在下载更新 ${ver}…`);
+      emitStatus({
+        state: "downloading",
+        version: ver,
+        percent: 0,
+        transferred: 0,
+        total: 0,
+        bytesPerSecond: 0,
+      });
       au.downloadUpdate().catch(async (err) => {
-        if (isManual || true) {
-          const r2 = await dialog.showMessageBox(win || undefined, {
-            type: "warning",
-            title: "自动下载失败",
-            message: `更新包下载失败：${err && err.message ? err.message : String(err)}`,
-            detail: "你可以直接前往 GitHub Releases 页面手动下载最新安装包。",
-            buttons: ["打开发布页", "关闭"],
-            defaultId: 0,
-            cancelId: 1,
-          });
-          if (r2.response === 0) shell.openExternal(RELEASES_URL);
-        }
+        isDownloading = false;
+        const msg = err && err.message ? err.message : String(err);
+        _setProgress(-1);
+        emitStatus({ state: "error", version: ver, message: msg });
+        const r2 = await dialog.showMessageBox(win || undefined, {
+          type: "warning",
+          title: "自动下载失败",
+          message: `更新包下载失败：${msg}`,
+          detail: "你可以直接前往 GitHub Releases 页面手动下载最新安装包。",
+          buttons: ["打开发布页", "关闭"],
+          defaultId: 0,
+          cancelId: 1,
+        });
+        if (r2.response === 0) shell.openExternal(RELEASES_URL);
       });
     } else if (res.response === 1) {
       shell.openExternal(RELEASES_URL);
     }
+  });
+
+  au.on("download-progress", (p) => {
+    const pct = Math.max(0, Math.min(100, Number(p && p.percent ? p.percent : 0)));
+    const ver = targetVersion || "新版本";
+    _setProgress(pct / 100, `codelet — 正在下载更新 ${ver} (${Math.round(pct)}%)`);
+    emitStatus({
+      state: "downloading",
+      version: ver,
+      percent: pct,
+      transferred: Number((p && p.transferred) || 0),
+      total: Number((p && p.total) || 0),
+      bytesPerSecond: Number((p && p.bytesPerSecond) || 0),
+    });
   });
 
   au.on("update-not-available", async () => {
@@ -80,26 +142,34 @@ function setupAutoUpdater({ app, getMainWindow, beforeQuitAndInstall }) {
   });
 
   au.on("update-downloaded", async (info) => {
-    const ver = info && info.version ? `v${info.version}` : "新版本";
+    isDownloading = false;
+    const ver = info && info.version ? `v${info.version}` : (targetVersion || "新版本");
+    downloadedVersion = ver;
+    _setProgress(-1, `codelet — ${ver} 已下载完成，等待重启安装`);
+    emitStatus({ state: "downloaded", version: ver, percent: 100 });
     const win = getParentWindow();
     const res = await dialog.showMessageBox(win || undefined, {
       type: "info",
       title: "更新已就绪",
       message: `codelet ${ver} 已下载完成`,
-      detail: "是否立即退出并安装更新？你也可以稍后在退出应用时自动完成安装。",
+      detail: "是否立即退出并安装更新？你也可以稍后点击右下角提示或在退出应用时自动完成安装。",
       buttons: ["立即重启安装", "稍后"],
       defaultId: 0,
       cancelId: 1,
     });
     if (res.response === 0) {
-      if (typeof requestAppQuitForInstall === "function") {
-        await requestAppQuitForInstall();
-      }
-      au.quitAndInstall(false, true);
+      await installDownloadedUpdate();
     }
   });
 
   au.on("error", async (err) => {
+    const wasDownloading = isDownloading;
+    isDownloading = false;
+    _setProgress(-1);
+    const msg = err && err.message ? err.message : String(err);
+    if (wasDownloading) {
+      emitStatus({ state: "error", version: targetVersion, message: msg });
+    }
     if (!manualCheckPending) return;
     manualCheckPending = false;
     const win = getParentWindow();
@@ -107,7 +177,7 @@ function setupAutoUpdater({ app, getMainWindow, beforeQuitAndInstall }) {
       type: "warning",
       title: "检查更新失败",
       message: "暂时无法连接到 GitHub Releases 检查更新。",
-      detail: err && err.message ? err.message : String(err),
+      detail: msg,
       buttons: ["打开 GitHub Releases", "关闭"],
       defaultId: 0,
       cancelId: 1,
@@ -163,4 +233,4 @@ async function checkForUpdates(app, { manual = true } = {}) {
   }
 }
 
-module.exports = { setupAutoUpdater, checkForUpdates };
+module.exports = { setupAutoUpdater, checkForUpdates, installDownloadedUpdate };
