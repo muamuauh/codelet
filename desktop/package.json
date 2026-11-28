@@ -1,7 +1,7 @@
 {
   "name": "codelet-desktop",
   "productName": "codelet",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "author": "gjq00",
   "description": "codelet Desktop — Local AI Coding Workbench",
   "main": "main.js",
