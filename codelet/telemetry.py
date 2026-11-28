@@ -16,7 +16,7 @@ starts heavily caching).
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 import time
 from typing import Any, Callable
 
@@ -100,6 +100,7 @@ class Telemetry:
     pricing: dict[str, dict[str, float]] = field(default_factory=lambda: dict(DEFAULT_PRICING))
     turns: list[TurnUsage] = field(default_factory=list)
     last_turn_start_index: int = 0  # marker for "this user turn started here"
+    legacy_call_offset: int = 0     # extra call count preserved from legacy summary-only snapshots
     on_record: list[Callable[[TurnUsage], None]] = field(default_factory=list)
 
     @property
@@ -197,7 +198,7 @@ class Telemetry:
             "total_uncached_in": tot_uncached,
             "total_cache_read": tot_cache,
             "total_out": tot_out,
-            "total_calls": len(self.turns),
+            "total_calls": len(self.turns) + self.legacy_call_offset,
         }
 
     def perf_summary(self, limit: int = 24) -> dict[str, Any]:
@@ -245,6 +246,75 @@ class Telemetry:
                     "input": float(table["input"]),
                     "output": float(table["output"]),
                 }
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize full per-call telemetry + legacy summary fields for session snapshots."""
+        cum = self.cumulative
+        out: dict[str, Any] = {
+            "input_tokens": cum.input_tokens,
+            "output_tokens": cum.output_tokens,
+            "cost_usd": cum.cost_usd,
+            "calls": len(self.turns) + self.legacy_call_offset,
+            "last_turn_start_index": self.last_turn_start_index,
+            "turns": [asdict(t) for t in self.turns],
+        }
+        if self.legacy_call_offset > 0:
+            out["legacy_call_offset"] = self.legacy_call_offset
+        return out
+
+    def load_dict(self, data: dict[str, Any] | None) -> None:
+        """Restore telemetry from a session snapshot (supports both full `turns`
+        snapshots and legacy summary-only snapshots)."""
+        self.turns = []
+        self.last_turn_start_index = 0
+        self.legacy_call_offset = 0
+        if not isinstance(data, dict):
+            return
+        raw_turns = data.get("turns")
+        if isinstance(raw_turns, list) and raw_turns:
+            for item in raw_turns:
+                if not isinstance(item, dict):
+                    continue
+                try:
+                    cost_raw = item.get("cost_usd")
+                    ttft_raw = item.get("ttft_ms")
+                    uncached_raw = item.get("uncached_input_tokens")
+                    self.turns.append(TurnUsage(
+                        input_tokens=int(item.get("input_tokens") or 0),
+                        output_tokens=int(item.get("output_tokens") or 0),
+                        cost_usd=float(cost_raw) if cost_raw is not None else None,
+                        model=str(item.get("model") or ""),
+                        cache_read_tokens=int(item.get("cache_read_tokens") or 0),
+                        cache_write_tokens=int(item.get("cache_write_tokens") or 0),
+                        uncached_input_tokens=int(uncached_raw) if uncached_raw is not None else None,
+                        latency_ms=float(item.get("latency_ms") or 0.0),
+                        ttft_ms=float(ttft_raw) if ttft_raw is not None else None,
+                        context_tokens=int(item.get("context_tokens") or 0),
+                        ts=float(item.get("ts") or 0.0),
+                    ))
+                except (TypeError, ValueError):
+                    continue
+            idx = int(data.get("last_turn_start_index") or 0)
+            self.last_turn_start_index = max(0, min(len(self.turns), idx))
+            self.legacy_call_offset = max(0, int(data.get("legacy_call_offset") or 0))
+            return
+
+        # Backward compatibility: older snapshots only stored aggregate totals.
+        ipt = int(data.get("input_tokens") or 0)
+        out = int(data.get("output_tokens") or 0)
+        legacy_calls = max(0, int(data.get("calls") or 0))
+        cost_raw = data.get("cost_usd")
+        if ipt > 0 or out > 0:
+            self.turns.append(TurnUsage(
+                input_tokens=ipt,
+                output_tokens=out,
+                cost_usd=float(cost_raw) if cost_raw is not None else None,
+                uncached_input_tokens=ipt,
+            ))
+            self.last_turn_start_index = 0
+            self.legacy_call_offset = max(0, legacy_calls - 1)
+        elif legacy_calls > 0:
+            self.legacy_call_offset = legacy_calls
 
     def snapshot(self) -> dict[str, Any]:
         """Plain-data view of this-turn + cumulative usage, for non-Rich UIs

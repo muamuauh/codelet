@@ -427,8 +427,13 @@ function renderMarkdown(md) {
     if (!line.trim()) { i++; continue; }
     const bMatch = line.trim().match(/^\x00B(\d+)\x00$/);
     if (bMatch) { out.push(blocks[Number(bMatch[1])]); i++; continue; }
-    const h = line.match(/^(#{1,4})\s+(.+)$/);
-    if (h) { out.push(`<h${h[1].length}>${renderInline(h[2])}</h${h[1].length}>`); i++; continue; }
+    const h = line.match(/^(#{1,6})\s+(.*)$/);
+    if (h) {
+      const htxt = h[2].trim();
+      out.push(htxt ? `<h${Math.min(h[1].length, 4)}>${renderInline(htxt)}</h${Math.min(h[1].length, 4)}>` : `<p>${escHtml(h[1])}</p>`);
+      i++;
+      continue;
+    }
     if (/^\s*(?:---|\*\*\*|___)\s*$/.test(line)) { out.push("<hr />"); i++; continue; }
     if (/^>\s?/.test(line)) {
       const q = [];
@@ -460,11 +465,17 @@ function renderMarkdown(md) {
     const p = [];
     while (
       i < lines.length && lines[i].trim() &&
-      !/^\x00B\d+\x00$/.test(lines[i].trim()) && !/^(#{1,4})\s+/.test(lines[i]) &&
+      !/^\x00B\d+\x00$/.test(lines[i].trim()) && !/^(#{1,6})\s+/.test(lines[i]) &&
       !/^>\s?/.test(lines[i]) && !/^\s*[-*+]\s+/.test(lines[i]) &&
       !/^\s*\d+\.\s+/.test(lines[i]) && !/^\s*(?:---|\*\*\*|___)\s*$/.test(lines[i])
     ) { p.push(renderInline(lines[i])); i++; }
-    out.push(`<p>${p.join("<br />")}</p>`);
+    if (!p.length) {
+      // Defensive guarantee: always advance `i` so partial streaming tokens can never loop forever.
+      out.push(`<p>${renderInline(lines[i])}</p>`);
+      i++;
+    } else {
+      out.push(`<p>${p.join("<br />")}</p>`);
+    }
   }
   return out.join("");
 }
@@ -477,8 +488,25 @@ function wireCodeCopies(container) {
   });
 }
 function setAssistantMarkdown(a) {
+  if (a._mdRaf) { cancelAnimationFrame(a._mdRaf); a._mdRaf = 0; }
+  a._mdDirty = false;
   a.bubble.innerHTML = renderMarkdown(a.text);
   wireCodeCopies(a.bubble);
+}
+function scheduleAssistantMarkdown(a) {
+  a._mdDirty = true;
+  if (a._mdRaf) return;
+  a._mdRaf = requestAnimationFrame(() => {
+    a._mdRaf = 0;
+    if (!a._mdDirty) return;
+    setAssistantMarkdown(a);
+    if (atBottom()) scroll();
+  });
+}
+function flushAssistantMarkdown(a) {
+  if (!a) return;
+  if (a._mdRaf) { cancelAnimationFrame(a._mdRaf); a._mdRaf = 0; }
+  if (a._mdDirty) setAssistantMarkdown(a);
 }
 
 // ---------- tool summary ----------
@@ -735,13 +763,17 @@ function render(ev) {
       a.activeThinkBody = null;
       a.text += ev.text;
       a.bubble.classList.remove("empty-bubble");
-      setAssistantMarkdown(a);
+      scheduleAssistantMarkdown(a);
+      return;
+    }
+    case "stream_end": {
+      if (current) flushAssistantMarkdown(current);
       if (atBottom()) scroll();
       return;
     }
-    case "stream_end": return;
     case "tool_start": {
       const a = ensureAssistant(); clearThinking(a);
+      flushAssistantMarkdown(a);
       a.activeThinkBody = null;
       // Any text emitted before a tool call is intermediate narration -> move it into the trace above the final answer.
       if (a.text.trim()) {
@@ -786,14 +818,14 @@ function render(ev) {
     case "telemetry": return onTelemetry(ev);
     case "turn_cancelled":
     case "turn_done": {
-      if (current) finalizeAssistantTurn(current, { cancelled: ev.type === "turn_cancelled" });
+      if (current) { flushAssistantMarkdown(current); finalizeAssistantTurn(current, { cancelled: ev.type === "turn_cancelled" }); }
       current = null; setBusy(false);
       if (atBottom()) scroll();
       return;
     }
     case "resumed": return onResumed(ev);
     case "error": {
-      if (current) finalizeAssistantTurn(current, { cancelled: true });
+      if (current) { flushAssistantMarkdown(current); finalizeAssistantTurn(current, { cancelled: true }); }
       transcript.appendChild(el("div", "note error", ev.message));
       current = null; setBusy(false); toggleEmpty(); scroll();
       return;

@@ -93,21 +93,46 @@ class OpenAICompatClient(LLMClient):
             kwargs["reasoning_effort"] = eff
 
         if on_text is not None:
+            emitted_any = False
+
+            def _tracked_text(delta: str) -> None:
+                nonlocal emitted_any
+                emitted_any = True
+                on_text(delta)
+
+            def _tracked_reasoning(delta: str) -> None:
+                nonlocal emitted_any
+                emitted_any = True
+                if on_reasoning is not None:
+                    on_reasoning(delta)
+
+            r_cb = _tracked_reasoning if on_reasoning is not None else None
             try:
-                return self._chat_streaming(kwargs, on_text, on_reasoning=on_reasoning)
+                return self._chat_streaming(kwargs, _tracked_text, on_reasoning=r_cb)
             except Exception:
-                # If the upstream model rejected `reasoning_effort`, retry streaming without it.
+                # If partial text/reasoning already streamed to the UI, do NOT
+                # silently re-run the entire request from scratch (which would
+                # freeze mid-sentence and duplicate output).
+                if emitted_any:
+                    raise
+                # Retry streaming without `reasoning_effort` if the model rejected it.
                 if "reasoning_effort" in kwargs:
                     fallback_kw = {k: v for k, v in kwargs.items() if k != "reasoning_effort"}
                     try:
-                        return self._chat_streaming(fallback_kw, on_text, on_reasoning=on_reasoning)
+                        return self._chat_streaming(fallback_kw, _tracked_text, on_reasoning=r_cb)
                     except Exception:
-                        pass
-                # Some "OpenAI-compatible" proxies reject stream / stream_options.
-                # Fall back to a normal call so the turn still completes (just
-                # without live typing). Safe because nothing was printed yet on
-                # the failure path -- _chat_streaming only calls on_text after a
-                # delta successfully arrives.
+                        if emitted_any:
+                            raise
+                # Some OpenAI-compatible relays reject `stream_options` — retry
+                # streaming without it before dropping to non-streaming.
+                try:
+                    return self._chat_streaming(
+                        kwargs, _tracked_text, on_reasoning=r_cb, include_usage=False
+                    )
+                except Exception:
+                    if emitted_any:
+                        raise
+                # Final fallback: non-streaming call when upstream truly forbids streaming.
                 pass
 
         started = time.perf_counter()
@@ -132,6 +157,7 @@ class OpenAICompatClient(LLMClient):
         on_text: "Callable[[str], None]",
         *,
         on_reasoning: "Callable[[str], None] | None" = None,
+        include_usage: bool = True,
     ) -> LLMResponse:
         """Stream chunks, forward text deltas, and reassemble an LLMResponse.
 
@@ -143,7 +169,8 @@ class OpenAICompatClient(LLMClient):
         stream_kwargs["stream"] = True
         # Ask for a trailing usage chunk; providers that support it give us
         # accurate telemetry, others simply omit it.
-        stream_kwargs["stream_options"] = {"include_usage": True}
+        if include_usage:
+            stream_kwargs["stream_options"] = {"include_usage": True}
 
         started = time.perf_counter()
         ttft_ms: float | None = None

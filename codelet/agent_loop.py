@@ -859,11 +859,18 @@ class AgentLoop:
 
         if first is not None:
             _emit(first)
+            burst = 0
             while True:
                 item = await queue.get()
                 if item is None:
                     break
                 _emit(item)
+                burst += 1
+                # Yield to the event loop when draining a burst so WebSocket
+                # sender tasks flush streamed deltas live instead of buffering.
+                if not queue.empty() and burst >= 4:
+                    burst = 0
+                    await asyncio.sleep(0)
         if printed_text:
             self._sink.stream_end()
 

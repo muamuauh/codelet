@@ -624,14 +624,18 @@ def test_cockpit_recognizes_active_resumed_session_as_live(tmp_path, monkeypatch
         for _ in range(8):
             ws.receive_json()
 
-        # Resume `main` -> should emit resumed + live cockpit frame with session_id == sid
+        # Resume `main` -> should emit resumed + todos + telemetry + live cockpit frame with session_id == sid
         ws.send_json({"type": "resume", "id": sid})
         f1 = ws.receive_json()
         assert f1["type"] == "resumed" and f1["id"] == sid
-        f2 = ws.receive_json()
-        assert f2["type"] == "cockpit"
-        assert f2["session_id"] == sid
-        assert f2["viewing_history"] is False
+        frames = [ws.receive_json() for _ in range(3)]
+        by_type = {f["type"]: f for f in frames}
+        assert "telemetry" in by_type
+        assert by_type["telemetry"]["session"]["input_tokens"] == 500
+        assert by_type["telemetry"]["session"]["output_tokens"] == 120
+        f_ck = by_type["cockpit"]
+        assert f_ck["session_id"] == sid
+        assert f_ck["viewing_history"] is False
 
         # Querying /api/cockpit?session_id=<sid> while active MUST return live (not viewing_history)
         r = client.get(f"/api/cockpit?session_id={sid}")
@@ -788,6 +792,88 @@ def test_gen_release_notes_categorizes_english_changes():
     assert "### 📝 Docs & Tests" in md
     assert "### 📦 Downloads" in md
     assert "**Full Changelog**: https://github.com/muamuauh/codelet/compare/v0.1.3...v0.1.4" in md
+
+
+def test_session_persists_and_restores_full_telemetry_across_resume(tmp_path, monkeypatch):
+    from codelet.llm.base import LLMClient, LLMResponse
+
+    class _MetricClient(LLMClient):
+        def chat(self, *, on_text=None, **kw):
+            return LLMResponse(
+                text_blocks=["ok"],
+                raw_content=[{"type": "text", "text": "ok"}],
+                stop_reason="end_turn",
+                usage={
+                    "input_tokens": 200,
+                    "cache_read_tokens": 1800,
+                    "output_tokens": 100,
+                    "cache_exclusive": True,
+                    "latency_ms": 2000.0,
+                    "ttft_ms": 400.0,
+                },
+            )
+
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_text('{"plugins": {"enabled": ["cockpit"]}}\n', encoding="utf-8")
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("codelet.agent_loop.build_client", lambda cfg: _MetricClient())
+    monkeypatch.setattr("codelet.persistence.session.SESSION_DIR", tmp_path / "sessions")
+    monkeypatch.setattr("codelet.plugins.builtin.cockpit.default_usage_path", lambda: tmp_path / "usage.jsonl")
+    monkeypatch.setattr("codelet.web.server._workspace_states_file", lambda: tmp_path / "ws_states.json")
+    monkeypatch.setattr("codelet.web.server._user_settings_file", lambda: settings_file)
+
+    app = create_app(auto_refresh=False)
+    client = TestClient(app)
+
+    # 1. Run one turn to record telemetry + persist snapshot
+    with client.websocket_connect("/ws") as ws:
+        for _ in range(8):
+            ws.receive_json()
+        ws.send_json({"type": "prompt", "text": "hello metrics"})
+        sid = None
+        for _ in range(40):
+            f = ws.receive_json()
+            if f["type"] == "sessions_changed" and f.get("active_session_id"):
+                sid = f["active_session_id"]
+            if f["type"] == "turn_done":
+                break
+        assert sid
+
+        # 2. Switch to a brand new conversation -> telemetry resets to 0
+        ws.send_json({"type": "new_conversation"})
+        cleared_frames = {}
+        for _ in range(14):
+            f = ws.receive_json()
+            cleared_frames[f["type"]] = f
+            if f["type"] == "panels":
+                break
+        assert cleared_frames["telemetry"]["session"]["input_tokens"] == 0
+
+        # While viewing the saved session as history in Cockpit API, real cache/perf must show!
+        hist_ck = client.get(f"/api/cockpit?session_id={sid}").json()
+        assert hist_ck["viewing_history"] is True
+        assert hist_ck["cache"]["total_cache_read"] == 1800
+        assert hist_ck["cache"]["total_uncached_in"] == 200
+        assert hist_ck["cache"]["cumulative_hit_pct"] == 90.0
+        assert hist_ck["perf"]["samples"] == 1
+        assert hist_ck["perf"]["latest_speed_tps"] == 50.0
+
+        # 3. Resume the original session -> Topbar telemetry + Cockpit stats are fully restored!
+        ws.send_json({"type": "resume", "id": sid})
+        resumed = {}
+        for _ in range(6):
+            f = ws.receive_json()
+            resumed[f["type"]] = f
+            if f["type"] == "cockpit":
+                break
+        assert resumed["telemetry"]["session"]["input_tokens"] == 2000
+        assert resumed["telemetry"]["session"]["output_tokens"] == 100
+        assert resumed["cockpit"]["cache"]["total_cache_read"] == 1800
+        assert resumed["cockpit"]["cache"]["cumulative_hit_pct"] == 90.0
+        assert resumed["cockpit"]["perf"]["samples"] == 1
+        assert resumed["cockpit"]["perf"]["latest_speed_tps"] == 50.0
+
 
 
 

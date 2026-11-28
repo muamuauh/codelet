@@ -247,6 +247,8 @@ def test_first_prompt_persists_immediately_generates_title_and_notifies_sidebar(
     from codelet.llm.models import ModelCatalog
 
     class _TitleAwareClient(LLMClient):
+        supports_title_gen = True
+
         def chat(self, *, messages: Any, system: str, tools: Any, model: str, max_tokens: int = 8192, on_text: Any = None, **kwargs: Any) -> LLMResponse:
             if "Generate a concise conversation title" in system:
                 return LLMResponse(

@@ -590,8 +590,27 @@ class Connection:
     # ---- outbound pump ----
 
     async def sender(self) -> None:
+        pending_next: dict[str, Any] | None = None
         while True:
-            frame = await self.outbound.get()
+            frame = pending_next if pending_next is not None else await self.outbound.get()
+            pending_next = None
+            # Coalesce consecutive text/reasoning deltas already waiting in the
+            # outbound queue into one WebSocket frame while preserving strict order.
+            ftype = frame.get("type")
+            if ftype in ("text_delta", "reasoning_delta"):
+                chunks = [str(frame.get("text") or "")]
+                while len(chunks) < 32:
+                    try:
+                        nxt = self.outbound.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
+                    if nxt.get("type") == ftype:
+                        chunks.append(str(nxt.get("text") or ""))
+                    else:
+                        pending_next = nxt
+                        break
+                if len(chunks) > 1:
+                    frame = {**frame, "text": "".join(chunks)}
             await self.ws.send_json(frame)
 
     def send(self, frame: dict[str, Any]) -> None:
@@ -718,6 +737,10 @@ class Connection:
         client = getattr(self.agent, "client", None)
         cfg = getattr(self.agent, "config", None)
         if client is None or cfg is None or not user_text.strip():
+            return
+        # Skip stateful/abstract unit-test stubs unless they opt in, while always
+        # running for real LLM providers (`openai`, `anthropic`, etc.).
+        if getattr(client, "provider_name", "abstract") == "abstract" and not getattr(client, "supports_title_gen", False):
             return
 
         system = (
@@ -1199,6 +1222,7 @@ class Connection:
         self.send({"type": "plugins", "plugins": self.agent.plugins_state()})
         self.send({"type": "commands", "commands": self._commands_data()})
         self.send({"type": "todos", "todos": self.agent.todos_state()})
+        self.send({"type": "telemetry", **self.agent.telemetry.snapshot()})
         self.send({"type": "cockpit", **self._cockpit_snapshot()})
         self.send({"type": "panels", "panels": self.agent.panels_state()})
 
@@ -1226,6 +1250,10 @@ class Connection:
         self.send({"type": "skills", "skills": self.agent.skills_state()})
         self.send({"type": "plugins", "plugins": self.agent.plugins_state()})
         self.send({"type": "commands", "commands": self._commands_data()})
+        self.send({"type": "todos", "todos": self.agent.todos_state()})
+        self.send({"type": "telemetry", **self.agent.telemetry.snapshot()})
+        self.send({"type": "cockpit", **self._cockpit_snapshot()})
+        self.send({"type": "panels", "panels": self.agent.panels_state()})
         self.send({"type": "sessions_changed"})
 
     def _set_profile(self, name: str) -> None:
@@ -1281,6 +1309,8 @@ class Connection:
         self._title_finalized = True
         self.send({"type": "resumed", "id": session_id,
                    "messages": _transcript(self.agent.context.messages)})
+        self.send({"type": "todos", "todos": self.agent.todos_state()})
+        self.send({"type": "telemetry", **self.agent.telemetry.snapshot()})
         self.send({"type": "cockpit", **self._cockpit_snapshot()})
 
     def reload_settings(self, new_settings: dict[str, Any], *, force_model: str | None = None) -> None:
@@ -2558,21 +2588,37 @@ def create_app(
                     return conn._cockpit_snapshot()
             from ..context import ConversationContext
             from ..plugins.builtin.cockpit import CockpitStore
+            from ..telemetry import Telemetry
             try:
                 snap = load_session(sid)
             except Exception as exc:
                 return {"enabled": True, "error": f"session not found: {exc}"}
             msgs = snap.get("messages") or []
             sys_prompt = snap.get("system_prompt") or ""
-            tele = snap.get("telemetry") or {}
+            tele_data = snap.get("telemetry") or {}
+            hist_tele = Telemetry()
+            hist_tele.load_dict(tele_data)
             limit = int(settings.get("context_window") or 200_000)
             ctx_obj = ConversationContext(config=Config(context_window=limit))
             ctx_obj.set_system_prompt(sys_prompt)
             ctx_obj.messages = list(msgs)
+            if hist_tele.turns:
+                last_t = hist_tele.turns[-1]
+                last_ctx = last_t.context_tokens or last_t.input_tokens
+                if last_ctx > 0:
+                    ctx_obj.note_usage({"total_input_tokens": last_ctx, "input_tokens": last_ctx})
             ctx_info = ctx_obj.breakdown()
-            ctx_info.setdefault("top_tools", [])
-            ctx_info.setdefault("total_tool_calls", 0)
-            calls = int(tele.get("calls") or 0)
+            from ..persistence.session import count_tool_calls
+            saved_tc = snap.get("tool_call_counts")
+            if isinstance(saved_tc, dict):
+                tool_counts = {str(k): int(v) for k, v in saved_tc.items() if k and int(v or 0) > 0}
+            else:
+                tool_counts = count_tool_calls(msgs)
+            ctx_info["top_tools"] = [
+                {"name": k, "count": v}
+                for k, v in sorted(tool_counts.items(), key=lambda kv: (-kv[1], kv[0]))[:6]
+            ]
+            ctx_info["total_tool_calls"] = sum(tool_counts.values())
             return {
                 "enabled": True,
                 "viewing_history": True,
@@ -2581,25 +2627,8 @@ def create_app(
                 "workspace": snap.get("workspace") or "",
                 "mode": snap.get("permission_mode") or "ask",
                 "context": ctx_info,
-                "cache": {
-                    "cumulative_hit_pct": 0,
-                    "latest_uncached_in": int(tele.get("input_tokens") or 0),
-                    "latest_out": int(tele.get("output_tokens") or 0),
-                    "total_uncached_in": int(tele.get("input_tokens") or 0),
-                    "total_cache_read": 0,
-                    "total_out": int(tele.get("output_tokens") or 0),
-                    "total_calls": calls,
-                },
-                "perf": {
-                    "samples": calls,
-                    "latest_latency_ms": None,
-                    "latest_speed_tps": None,
-                    "avg_latency_ms": None,
-                    "p95_latency_ms": None,
-                    "avg_speed_tps": None,
-                    "peak_speed_tps": None,
-                    "series": [],
-                },
+                "cache": hist_tele.cache_stats(),
+                "perf": hist_tele.perf_summary(),
                 "usage": CockpitStore().summary(),
             }
         for conn in list(connections):

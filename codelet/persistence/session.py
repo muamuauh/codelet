@@ -354,6 +354,9 @@ def _serialize(
         for t in agent.todo_store.todos:
             todos.append(asdict(t))
 
+    tool_counts_raw = getattr(agent, "_tool_call_counts", None) or {}
+    tool_counts = {str(k): int(v) for k, v in tool_counts_raw.items() if k and int(v or 0) > 0}
+
     return {
         "id": session_id,
         "created_at": created_at,
@@ -369,6 +372,7 @@ def _serialize(
         "compactions": agent.context.compactions,
         "depth": agent.context.depth,
         "todos": todos,
+        "tool_call_counts": tool_counts,
         "telemetry": _telemetry_dump(agent),
     }
 
@@ -377,6 +381,8 @@ def _telemetry_dump(agent: "AgentLoop") -> dict[str, Any]:
     tele = getattr(agent, "telemetry", None)
     if tele is None:
         return {}
+    if hasattr(tele, "to_dict"):
+        return tele.to_dict()
     cum = tele.cumulative
     return {
         "input_tokens": cum.input_tokens,
@@ -397,6 +403,34 @@ def restore_into(agent: "AgentLoop", snapshot: dict[str, Any]) -> None:
     agent.context.set_system_prompt(snapshot.get("system_prompt") or "")
     agent.context.compactions = int(snapshot.get("compactions") or 0)
     agent.context.depth = int(snapshot.get("depth") or 0)
+    agent.context._anchor = None
+
+    # Restore per-session telemetry (tokens, cache hit rate, latency/speed trend, cost).
+    tele = getattr(agent, "telemetry", None)
+    if tele is not None and hasattr(tele, "load_dict"):
+        tele.load_dict(snapshot.get("telemetry"))
+        if tele.turns:
+            last = tele.turns[-1]
+            ctx_tok = last.context_tokens or last.input_tokens
+            if ctx_tok > 0:
+                agent.context.note_usage({"total_input_tokens": ctx_tok, "input_tokens": ctx_tok})
+
+    # Restore per-session tool call counts (fallback to tallying `tool_use` blocks
+    # in saved messages for older snapshots).
+    if hasattr(agent, "_tool_call_counts"):
+        saved_counts = snapshot.get("tool_call_counts")
+        if isinstance(saved_counts, dict):
+            restored_counts: dict[str, int] = {}
+            for k, v in saved_counts.items():
+                try:
+                    n = int(v)
+                    if k and n > 0:
+                        restored_counts[str(k)] = n
+                except (TypeError, ValueError):
+                    continue
+            agent._tool_call_counts = restored_counts
+        else:
+            agent._tool_call_counts = count_tool_calls(agent.context.messages)
 
     # Best-effort todo restore: skip if shape doesn't match so a stale snapshot
     # never blocks resume.
@@ -415,6 +449,23 @@ def restore_into(agent: "AgentLoop", snapshot: dict[str, Any]) -> None:
 
 
 # ---------- helpers ----------
+
+def count_tool_calls(messages: list[Any]) -> dict[str, int]:
+    """Tally tool invocations from `tool_use` blocks across assistant messages."""
+    counts: dict[str, int] = {}
+    for msg in messages:
+        if not isinstance(msg, dict) or msg.get("role") != "assistant":
+            continue
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "tool_use":
+                name = str(block.get("name") or "").strip()
+                if name:
+                    counts[name] = counts.get(name, 0) + 1
+    return counts
+
 
 def _summarize(messages: list[Any], limit: int = 80) -> str:
     """Title for a session = its first user message, whitespace-collapsed and
