@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "codelet"
-version = "0.1.2"
+version = "0.1.3"
 description = "Enhanced codelet -- learning fork with subagent / parallel / skill systems"
 requires-python = ">=3.10"
 readme = "README.md"
