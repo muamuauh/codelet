@@ -208,15 +208,31 @@ class OpenAICompatClient(LLMClient):
         }
         details = getattr(usage_obj, "prompt_tokens_details", None)
         details_cached = 0
+        details_write = 0
         if details is not None:
             details_cached = int(getattr(details, "cached_tokens", 0) or (
                 details.get("cached_tokens", 0) if isinstance(details, dict) else 0
             ) or 0)
+            details_write = int(
+                getattr(details, "cache_creation_tokens", 0)
+                or getattr(details, "cache_write_tokens", 0)
+                or (
+                    (details.get("cache_creation_tokens") or details.get("cache_write_tokens") or 0)
+                    if isinstance(details, dict)
+                    else 0
+                )
+                or 0
+            )
         anthropic_cached = int(getattr(usage_obj, "cache_read_input_tokens", 0) or 0)
         cached = details_cached or anthropic_cached
         if cached:
             usage["cache_read_tokens"] = cached
-        cache_write = int(getattr(usage_obj, "cache_creation_input_tokens", 0) or 0)
+        cache_write = int(
+            getattr(usage_obj, "cache_creation_input_tokens", 0)
+            or getattr(usage_obj, "cache_write_tokens", 0)
+            or details_write
+            or 0
+        )
         if cache_write:
             usage["cache_write_tokens"] = cache_write
 
