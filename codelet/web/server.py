@@ -528,6 +528,7 @@ class Connection:
             self.store = SessionStore(project_dir=Path.cwd() / ".codelet")
         except Exception:
             self.store = None
+        self._title_finalized = False
         self._apply_catalog_metadata(self._catalog_snapshot())
 
     def _catalog_snapshot(self) -> CatalogSnapshot:
@@ -695,16 +696,72 @@ class Connection:
             await self._on_compact(str(frame.get("focus", "")))
 
     def _rename_session(self, sid: str, title: str) -> None:
-        if sid and title.strip():
+        clean = title.strip()
+        if sid and clean:
+            if self.store is not None and self.store.id == sid:
+                self.store.title = clean
+                self._title_finalized = True
             with contextlib.suppress(Exception):
-                rename_session(sid, title.strip(), project_dir=Path.cwd() / ".codelet")
-            self.send({"type": "sessions_changed"})
+                rename_session(sid, clean, project_dir=Path.cwd() / ".codelet")
+            self.send({"type": "sessions_changed", "active_session_id": self.store.id if self.store is not None else None})
 
     def _delete_session(self, sid: str) -> None:
         if sid:
             with contextlib.suppress(Exception):
                 delete_session(sid, project_dir=Path.cwd() / ".codelet")
             self.send({"type": "sessions_changed"})
+
+    async def _generate_session_title(self, session_id: str, user_text: str, workspace: str) -> None:
+        """Background non-blocking LLM title generation for a newly started conversation."""
+        import inspect
+
+        client = getattr(self.agent, "client", None)
+        cfg = getattr(self.agent, "config", None)
+        if client is None or cfg is None or not user_text.strip():
+            return
+
+        system = (
+            "Generate a concise conversation title summarizing the user's request "
+            "(max 16 Chinese characters or 6 English words, in the same language as the user). "
+            "Output ONLY the plain title text — no quotes, no markdown, no prefixes, no trailing period."
+        )
+        kwargs: dict[str, Any] = {
+            "messages": [{"role": "user", "content": user_text.strip()[:800]}],
+            "system": system,
+            "tools": [],
+            "model": cfg.model,
+            "max_tokens": 64,
+        }
+        try:
+            sig = inspect.signature(client.chat)
+            if "reasoning_effort" in sig.parameters:
+                kwargs["reasoning_effort"] = "off"
+        except (TypeError, ValueError):
+            pass
+
+        try:
+            resp = await asyncio.wait_for(asyncio.to_thread(client.chat, **kwargs), timeout=20.0)
+        except Exception:
+            return
+
+        raw = " ".join(getattr(resp, "text_blocks", None) or []).strip()
+        title = _clean_generated_title(raw)
+        if not title:
+            return
+
+        still_active = self.store is not None and self.store.id == session_id
+        # Respect manual renames that occurred while title generation was in flight.
+        if still_active and self._title_finalized:
+            return
+        if still_active and self.store is not None:
+            self.store.title = title
+            self._title_finalized = True
+        with contextlib.suppress(Exception):
+            rename_session(session_id, title, project_dir=Path(workspace) / ".codelet")
+        self.send({
+            "type": "sessions_changed",
+            "active_session_id": self.store.id if still_active and self.store is not None else None,
+        })
 
     async def _on_prompt(self, text: str, attachments: list[dict[str, Any]] | None = None) -> None:
         attachments = attachments or []
@@ -735,6 +792,19 @@ class Connection:
             return
         self.busy = True
         self._active_turn_task = asyncio.current_task()
+
+        # Immediately persist & announce a brand-new conversation so it appears in the
+        # left sidebar right away, then asynchronously generate a concise LLM title.
+        is_first_turn = len(self.agent.context.messages) == 0 and not self._title_finalized
+        if self.store is not None:
+            with contextlib.suppress(Exception):
+                self.store.record(self.agent, initial_prompt=text or prompt)
+            self.send({"type": "sessions_changed", "active_session_id": self.store.id})
+            if is_first_turn and (text or "").strip():
+                asyncio.create_task(
+                    self._generate_session_title(self.store.id, text.strip(), self.workspace)
+                )
+
         # Snapshot tool, skill & panel sets so we can refresh the sidebar/inspector
         # if the turn changed them (`create_tool`, `create_plugin_pack`, `install_skill`, `skill-creator`).
         tools_before = set(self.agent.registry.names())
@@ -747,7 +817,12 @@ class Connection:
             if self.store is not None:
                 with contextlib.suppress(Exception):
                     self.store.record(self.agent)
+                self.send({"type": "sessions_changed", "active_session_id": self.store.id})
         except asyncio.CancelledError:
+            if self.store is not None and self.agent.context.messages:
+                with contextlib.suppress(Exception):
+                    self.store.record(self.agent)
+                self.send({"type": "sessions_changed", "active_session_id": self.store.id})
             self.send({"type": "turn_cancelled"})
             self.send({"type": "notice", "message": "Stopped by user.", "level": "warn"})
         except Exception as exc:  # never kill the socket on a turn error
@@ -1198,7 +1273,12 @@ class Connection:
                     self.send({"type": "commands", "commands": self._commands_data()})
                     self.send({"type": "sessions_changed"})
         restore_into(self.agent, snapshot)
-        self.store = SessionStore(session_id=session_id, project_dir=Path.cwd() / ".codelet")
+        self.store = SessionStore(
+            session_id=session_id,
+            project_dir=Path.cwd() / ".codelet",
+            title=snapshot.get("summary") or None,
+        )
+        self._title_finalized = True
         self.send({"type": "resumed", "id": session_id,
                    "messages": _transcript(self.agent.context.messages)})
         self.send({"type": "cockpit", **self._cockpit_snapshot()})
@@ -1447,6 +1527,31 @@ def _stringify_tool_result_content(content: Any) -> str:
                 parts.append(json.dumps(item, ensure_ascii=False))
         return "\n".join(p for p in parts if p)
     return str(content)
+
+
+def _clean_generated_title(raw: str, limit: int = 36) -> str:
+    """Normalize LLM-generated session titles into a single clean line."""
+    if not raw:
+        return ""
+    line = ""
+    for part in raw.splitlines():
+        s = part.strip()
+        if s:
+            line = s
+            break
+    if not line:
+        return ""
+    # Strip common prefixes/markdown/quotes
+    line = line.lstrip("#*-•> ").strip()
+    for prefix in ("标题：", "标题:", "Title:", "title:"):
+        if line.startswith(prefix):
+            line = line[len(prefix):].strip()
+    line = line.strip(" \t\"'“”‘’`《》【】[]")
+    line = line.rstrip("。.!！?？;；:：")
+    line = " ".join(line.split())
+    if not line:
+        return ""
+    return line if len(line) <= limit else line[: limit - 1] + "…"
 
 
 def _transcript(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:

@@ -241,3 +241,69 @@ def test_api_plugins_and_ws_plugin_toggle(client):
         t_off = _recv_until(ws, "tools")["tools"]
         assert any(p["name"] == "memory" and not p["enabled"] for p in p_off)
         assert not any(t["name"] == "memory" for t in t_off)
+
+
+def test_first_prompt_persists_immediately_generates_title_and_notifies_sidebar(monkeypatch, tmp_path):
+    from codelet.llm.models import ModelCatalog
+
+    class _TitleAwareClient(LLMClient):
+        def chat(self, *, messages: Any, system: str, tools: Any, model: str, max_tokens: int = 8192, on_text: Any = None, **kwargs: Any) -> LLMResponse:
+            if "Generate a concise conversation title" in system:
+                return LLMResponse(
+                    text_blocks=['"项目背景与架构梳理。"'],
+                    raw_content=[{"type": "text", "text": '"项目背景与架构梳理。"'}],
+                    stop_reason="end_turn",
+                )
+            return LLMResponse(
+                text_blocks=["Main reply"],
+                raw_content=[{"type": "text", "text": "Main reply"}],
+                stop_reason="end_turn",
+                usage={"input_tokens": 10, "output_tokens": 5},
+            )
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("codelet.agent_loop.build_client", lambda config: _TitleAwareClient())
+    monkeypatch.setattr("codelet.plugins.builtin.cockpit.default_usage_path", lambda: tmp_path / "cockpit_usage.jsonl")
+    monkeypatch.setattr("codelet.web.server._workspace_states_file", lambda: tmp_path / "workspace_states.json")
+    tc = TestClient(create_app(
+        catalog=ModelCatalog(cache_path=tmp_path / "models_cache.json"),
+        auto_refresh=False,
+    ))
+
+    with tc.websocket_connect("/ws") as ws:
+        _recv_until(ws, "cockpit", limit=12)
+        ws.send_json({"type": "prompt", "text": "看一下这个项目，阅读一下相关文档和代码"})
+        frames = []
+        for _ in range(40):
+            f = ws.receive_json()
+            frames.append(f)
+            if f["type"] == "turn_done":
+                break
+        # At least one sessions_changed with active_session_id must have been emitted
+        sc_frames = [f for f in frames if f["type"] == "sessions_changed" and f.get("active_session_id")]
+        assert sc_frames
+        sid = sc_frames[0]["active_session_id"]
+
+        # Drain a moment if the background title task sends its update right after turn_done
+        import time
+        deadline = time.time() + 3.0
+        title = ""
+        while time.time() < deadline:
+            data = tc.get("/api/sessions").json()
+            rows = data.get("project") or []
+            hit = next((r for r in rows if r["id"] == sid), None)
+            if hit and hit.get("title") == "项目背景与架构梳理":
+                title = hit["title"]
+                break
+            time.sleep(0.05)
+        assert title == "项目背景与架构梳理"
+
+        # A second turn must NOT clobber the generated title back to the raw first prompt!
+        ws.send_json({"type": "prompt", "text": "继续分析测试目录"})
+        for _ in range(40):
+            if ws.receive_json()["type"] == "turn_done":
+                break
+        rows_after = tc.get("/api/sessions").json().get("project") or []
+        hit_after = next(r for r in rows_after if r["id"] == sid)
+        assert hit_after["title"] == "项目背景与架构梳理"
+

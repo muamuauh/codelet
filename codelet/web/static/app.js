@@ -704,7 +704,9 @@ function render(ev) {
       cockpitViewSession = "__live__";
       toggleEmpty(); highlight(); renderCockpitToolbar();
       return;
-    case "sessions_changed": return loadSessions();
+    case "sessions_changed":
+      if (ev.active_session_id) activeSession = ev.active_session_id;
+      return loadSessions();
     case "tools": return renderToolsList(ev.tools);
     case "skills": return renderSkillsList(ev.skills);
     case "plugins": return renderPluginsList(ev.plugins);

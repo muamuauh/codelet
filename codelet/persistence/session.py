@@ -67,20 +67,27 @@ class SessionStore:
         session_id: str | None = None,
         base_dir: Path | None = None,
         project_dir: Path | None = None,
+        title: str | None = None,
     ) -> None:
         self.id = session_id or _new_session_id()
         self.base_dir = base_dir or SESSION_DIR
         self.project_dir = project_dir
         self.created_at = _utcnow_iso()
+        self.title: str | None = title.strip() if isinstance(title, str) and title.strip() else None
 
     @property
     def path(self) -> Path:
         return self.base_dir / f"{self.id}.json"
 
-    def record(self, agent: "AgentLoop") -> Path:
+    def record(self, agent: "AgentLoop", *, initial_prompt: str | None = None) -> Path:
         """Atomically write a snapshot of `agent` to disk."""
         workspace = str(self.project_dir.parent.resolve()) if self.project_dir is not None else os.getcwd()
-        snapshot = _serialize(agent, self.id, self.created_at, workspace=workspace)
+        summary = self.title
+        if not summary:
+            summary = _summarize(agent.context.messages)
+        if not summary and initial_prompt:
+            summary = _summarize([{"role": "user", "content": initial_prompt}])
+        snapshot = _serialize(agent, self.id, self.created_at, workspace=workspace, summary=summary)
         path = _write_atomic(self.path, snapshot)
         if self.project_dir is not None:
             # Best-effort: a broken registry must never sink the real save.
@@ -333,7 +340,14 @@ def list_project_sessions(project_dir: Path | None = None) -> list[dict[str, Any
 
 # ---------- serialization ----------
 
-def _serialize(agent: "AgentLoop", session_id: str, created_at: str, *, workspace: str | None = None) -> dict[str, Any]:
+def _serialize(
+    agent: "AgentLoop",
+    session_id: str,
+    created_at: str,
+    *,
+    workspace: str | None = None,
+    summary: str | None = None,
+) -> dict[str, Any]:
     cfg = agent.config
     todos: list[dict[str, Any]] = []
     if getattr(agent, "todo_store", None) is not None:
@@ -349,7 +363,7 @@ def _serialize(agent: "AgentLoop", session_id: str, created_at: str, *, workspac
         "provider": cfg.provider.value,
         "profile": cfg.profile_name,
         "permission_mode": cfg.permission_mode.value,
-        "summary": _summarize(agent.context.messages),
+        "summary": summary if summary is not None else _summarize(agent.context.messages),
         "system_prompt": agent.context.system_prompt,
         "messages": agent.context.messages,
         "compactions": agent.context.compactions,
