@@ -12,7 +12,7 @@
 
 <p>
   <img src="https://img.shields.io/static/v1?label=Version&message=v0.1.3&color=10b981&style=flat-square" alt="Version" />
-  <img src="https://img.shields.io/static/v1?label=Tests&message=360+passed&color=22c55e&style=flat-square" alt="Tests" />
+  <img src="https://img.shields.io/static/v1?label=Tests&message=361+passed&color=22c55e&style=flat-square" alt="Tests" />
   <img src="https://img.shields.io/static/v1?label=License&message=MIT&color=2563eb&style=flat-square" alt="License" />
   <img src="https://img.shields.io/static/v1?label=Python&message=3.10%2B&color=0f172a&style=flat-square" alt="Python" />
   <img src="https://img.shields.io/static/v1?label=UI&message=CLI+%7C+Web+%7C+Desktop&color=0284c7&style=flat-square" alt="UI" />
@@ -54,7 +54,7 @@
 | :--- | :--- |
 | **异步并行 Agent Loop** | 原生 `asyncio` 驱动，单轮多 `tool_use` 经 `asyncio.gather` 并发执行并严格按原始顺序回填，单个工具异常自动隔离不拖垮整轮；支持实时 Token / 推理链（`reasoning_delta` / `thinking_delta`）流式输出与生成中随时 **Stop** 中断。 |
 | **原生 Cockpit 驾驶舱** | 内置 `cockpit` 插件（默认启用）：顶部支持按项目筛选、历史会话检视与自动刷新间隔（`3s/5s/10s/30s`）；SVG 上下文环形仪表盘 + 5 段悬浮构成明细 + 一键 `/compact`；缓存命中率与累计消耗；TTFT / 均值 / P95 延迟与 `tok/s` 近 24 轮趋势图；跨会话今日 / 7 日消费统计与模型分布（不绑定特定中转站余额）。 |
-| **桌面客户端与三栏工作台** | 提供 **Windows 独立桌面版**（Electron + 内置 PyInstaller 后端，零 Python 环境开箱即用）：支持系统托盘常驻、资源管理器右键“Open with codelet”、`electron-updater` 自动检查更新；内置可视化 **API 与模型设置弹窗**（Windows DPAPI 加密存储 API Key、不落明文）、方案级**自定义模型目录（API ID / 显示名称映射）**与**中转站 AI 读文档自动发现模型**；一体化输入卡片、按工作区分组的会话列表及按工作区独立记住插件/工具/技能与折叠状态。 |
+| **桌面客户端与三栏工作台** | 提供 **Windows 独立桌面版**（Electron + 内置 PyInstaller 后端，零 Python 环境开箱即用）：支持关闭窗口时询问「最小化到托盘 / 直接退出」并记忆偏好、资源管理器右键“Open with codelet”、带实时下载进度条的 `electron-updater` 自动更新与按 commit 自动分类的英文 Release Notes；左下角内置四分区 **设置中心（通用 / 模型与接口 / 插件 / 关于）**，支持中英双语即时切换、Agent/上下文参数自定义、Windows DPAPI 加密存储 API Key、提供商卡片式管理、模型目录自定义与中转站 AI 读文档发现模型；一体化输入卡片、按工作区分组的会话列表及按工作区独立记住执行模式、思考强度、插件/工具/技能与折叠状态。 |
 | **`/btw` 隔离侧栏问答** | 独立上下文旁路提问面板（Web 右侧 `Side /btw` Tab + CLI `/btw`），可附带主对话只读快照但**绝不污染主上下文**，即使主回合正在运行中也可以并发提问。 |
 | **动态模型目录与多 Provider** | 自动从 OpenAI 兼容端点（`GET /v1/models`）拉取最新模型目录并本地 TTL 缓存（默认 24h），带搜索、厂商分组、上下文窗口 / 价格 / Vision / Reasoning 能力标签与一键刷新；定价与上下文上限自动同步到遥测与压缩预算。 |
 | **四层上下文压缩与 SubAgent** | L0 超长输出落盘 → L1 零 LLM 清理旧工具结果 → L2 七节结构化滚动摘要（以服务商 `input_tokens` 为锚，保留 todo 列表）→ L3 保持 `tool_use/tool_result` 配对的硬上限；支持 `task` 并行子代理（深度上限 2、隔离上下文）。 |
@@ -91,7 +91,7 @@
 
 codelet 采用清晰的两层能力架构，左侧栏直观分区、全部支持会话中热插拔：
 
-- **上层 · Plugins（功能包层）**：将一组相关的 `Tools + Skills + Commands + Panels + Middleware + TurnPolicy` 捆绑为可一键启停的功能包，支持 `*.py` 单文件、entry points 以及目录包 `.codelet/plugins/<name>/`（`plugin.py` + `skills/`）。每个插件拥有**可逆生命周期句柄（`PluginHandle.dispose()` / `ctx.effect()`）**与可选 **`requires` 依赖拓扑排序 + 级联卸载**，Web 勾选启停直接在原 `AgentLoop` 上原地热插拔，零状态丢失；插件还可通过 `ctx.register_panel()` 向右侧 Inspector 动态注册专属 UI 面板。
+- **上层 · Plugins（功能包层）**：将一组相关的 `Tools + Skills + Commands + Panels + Middleware + TurnPolicy` 捆绑为可一键启停的功能包，支持 `*.py` 单文件、entry points 以及目录包 `.codelet/plugins/<name>/`（`plugin.py` + `skills/`）。每个插件拥有**可逆生命周期句柄（`PluginHandle.dispose()` / `ctx.effect()`）**与可选 **`requires` 依赖拓扑排序 + 级联卸载**，勾选或切换滑动开关即可在原 `AgentLoop` 上原地热插拔，零状态丢失；插件还支持声明 **`settings_schema`** 自动在 **设置 → 插件** 生成专属配置表单（保存后自动热重载），以及通过 `ctx.register_panel()` 向右侧 Inspector 动态注册专属 UI 面板。
 - **底层 · Base Capabilities（原子能力层）**：`Tools`（按 `Core / From plugins / Self-evolved` 分组）与 `Skills`（按 `Built-in / From plugins / Standalone · Project / Standalone · Global` 分组），支持细粒度单独开关。
 
 ### 内置插件一览
@@ -126,7 +126,7 @@ codelet 采用清晰的两层能力架构，左侧栏直观分区、全部支持
 | **`codelet-x.y.z-portable.exe`** | 单文件便携版，下载后双击即用，不写入安装记录 |
 | **`codelet-x.y.z-win-x64-unpacked.zip`** | 解压即用目录版，解压后直接运行 `codelet.exe` |
 
-打开后点击右上角齿轮图标（**API 与模型设置**）填入任意 OpenAI 兼容端点或 Anthropic 的 `Base URL` 与 `API Key`（通过 Windows DPAPI 加密保存，绝不落明文），配置好默认模型后即可直接开用；如果使用自定义中转站，还支持一键由当前模型自动阅读中转站文档并拉取可用模型目录。
+打开后点击左下角设置齿轮图标（**设置中心**），在 **模型与接口** 中添加或编辑提供商（支持 OpenAI / Anthropic / DeepSeek / Kimi / ZenMux / OpenRouter 等内置目录或任意自定义兼容 API），填入 `API Key`（通过 Windows DPAPI 加密保存，绝不落明文）即可开用；还可在 **通用** 中切换中英双语、主题与关闭窗口行为，在 **插件** 中可视化启停并配置每个插件的专属参数，在 **关于** 中查看版本号与一键检查更新。
 
 ### 方式 B：从源码运行（CLI / Web / 桌面开发模式）
 
@@ -247,10 +247,11 @@ codelet/
 │   ├── hooks/                         # PreToolUse / PostToolUse / UserPromptSubmit shell hooks
 │   ├── persistence/                   # 原子 Session 持久化与项目级会话注册表
 │   ├── subagent/                      # 上下文隔离并行子代理
-│   └── web/                           # FastAPI + WebSocket 后端与零构建链三栏前端（含动态插件面板）
+│   └── web/                           # FastAPI + WebSocket 后端与零构建链三栏前端（含设置中心与动态插件面板）
+├── desktop/                           # Electron Windows 桌面客户端（DPAPI 密钥库 / 托盘 / 实时进度更新 / 打包脚本）
 ├── evals/                             # 本地任务评测、压缩保留评测、记忆/路由评测、SWE-bench Lite 适配器
 ├── docs/                              # 架构图、时序图、技术细节、插件架构与面试 Q&A
-└── tests/                             # 342 项单元与 WebSocket 端到端测试
+└── tests/                             # 361 项单元与 WebSocket 端到端测试
 ```
 
 ---
@@ -258,7 +259,7 @@ codelet/
 ## 评测与测试
 
 ```bash
-# 运行全部单元与端到端集成测试（342 passed）
+# 运行全部单元与端到端集成测试（361 passed）
 pytest -q
 
 # 运行本地执行式任务评测（evals/tasks/*.yaml）
@@ -268,7 +269,7 @@ python -m evals.runner
 python -m evals.swebench.run_swebench --gold --limit 5
 ```
 
-- **全量回归测试**：`342 passed`（覆盖核心 Loop、权限、压缩、遥测、模型目录、Cockpit、MCP stdio 桥接、可逆 `dispose()` / 级联卸载、Creator 插件包、`/btw`、思考强度、GitHub Skill 安装器与 WebSocket 端到端流程）。
+- **全量回归测试**：`361 passed`（覆盖核心 Loop、权限、压缩、遥测、模型目录、设置中心与插件配置热重载、Cockpit、MCP stdio 桥接、可逆 `dispose()` / 级联卸载、Creator 插件包、`/btw`、思考强度、GitHub Skill 安装器、Release Notes 自动分类生成与 WebSocket 端到端流程）。
 - **专项评测成果**：上下文结构化压缩保留率 `59/60`（摘要输入省约 80%）；跨会话记忆纠偏遵守率 `3/20 → 19/20`；意图路由误改率 `1/16 → 0/16`；SWE-bench Lite 实测详见 [`evals/swebench/README.md`](./evals/swebench/README.md)。
 
 ---

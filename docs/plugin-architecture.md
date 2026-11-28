@@ -288,11 +288,17 @@ SWE-bench 那套已经跑通的 Docker 管路。`add_system_prompt_section` 告�
   写明，发现机制按项目选择性开启 —— 这条边界要在文档里讲清楚。自进化把这条边界推得更远，所以它
   额外加了 ASK 模式源码审批和核心工具保护，见上文。
 
+## 可逆热插拔与声明式插件设置（Web / 桌面设置中心）
+
+后续在 Web 与 Windows 桌面工作台中进一步补齐了生产级插件生命周期与可视化配置能力：
+
+- **可逆句柄 `PluginHandle` + 依赖级联卸载**：每个通过 `AppliedPlugins.mount_instance()` 挂载的插件都会把新增工具、被覆写的旧工具快照、Skills、命令、面板、中间件、`TurnPolicy` 与 `disposers` 记入 `PluginHandle`。调用 `AgentLoop.mount_plugin()` / `unmount_plugin()` 时，直接在当前 `AgentLoop` 上原地挂载或回滚卸载（包括恢复被覆写的工具与关闭 MCP 子进程），无需重启会话。
+- **缓存命中率影响**：纯面板 / 命令 / 策略型插件（如 `cockpit`、`router`）热插拔后 `tools` Schema 与 `system prompt` 文本逐字节不变，对 Prompt Cache **零失效**；增删工具或 prompt 段的插件（如 `rag`、`memory`、`sandbox`、`evolve`、`mcp`）仅在切换后的紧接 1 轮触发前缀重缓存，下一轮即恢复高命中率。`rag` 的自动注入走 `prompt_middleware` 拼在最新一条用户消息里，不破坏历史前缀缓存。
+- **声明式 `settings_schema` 自动渲染表单**：插件可在对象/类上声明可选的 `settings_schema = [...]`（支持 `boolean` / `string` / `number` / `select` / `json`），设置中心（**设置 → 插件 → 具体插件**）会自动渲染对应开关与表单，保存至 `~/.codelet/settings.json` 的 `plugins.config.<name>` 并在插件已启用时原地热重载；未声明 schema 的插件自动提供 JSON 配置编辑器兜底。
+
 ## 暂不做的事
 
-插件市场 / 版本管理，以及跨插件的依赖解析。第三方插件保持静态（启动时加载）；唯一的动态路径是
-**自进化**（evolve 插件把 agent 自己写的工具热加载进它专属的 evolved 目录，见上文），这是有意
-限定在那个选择性开启的子系统里的，而不是给任意插件开放通用热重载。
+插件市场与远程分发体系保持克制；所有插件仍遵循本地显式白名单启用原则。
 
 ---
 

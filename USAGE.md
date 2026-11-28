@@ -106,7 +106,8 @@ python -m codelet --base-url https://api.deepseek.com/v1 --api-key sk-xxx --mode
 |---|---|---|
 | **自定义命令** | `.codelet/commands/<name>.md` | 用 `/<name> 参数` 调用，支持 `{args}` `{1}` `{2}` 占位（已带 `/audit` 示例）|
 | **Skill 技能** | `.codelet/skills/`（支持 `*.md` 与 `<name>/SKILL.md`） | 模型按需加载的专项知识；内置 `skill-creator` 可按描述生成新技能，或用 `/install <github-url>` 直接安装热重载 |
-| **Plugin 插件** | `.codelet/plugins/`（`*.py` 或目录技能包） | 上层热插拔功能包，可捆绑 Tools + Skills + Commands；内置 `cockpit` 默认启用 |
+| **Plugin 插件** | `.codelet/plugins/`（`*.py` 或目录技能包） | 上层热插拔功能包，可捆绑 Tools + Skills + Commands + Panels，并支持声明 `settings_schema` 在 **设置 → 插件** 自动生成专属配置表单；内置 `cockpit` 默认启用 |
+| **设置中心** | Web / 桌面端左下角齿轮图标 | 集中管理 **通用**（主题、中英双语、窗口关闭行为、Agent/上下文参数）、**模型与接口**（DPAPI 加密密钥与提供商管理）、**插件**（滑动开关与专属设置）及 **关于**（版本与自动更新检查） |
 | **Hooks** | `settings.json` 的 `hooks` | 工具执行前后/收到输入时跑自定义 shell 命令，可拦截/改写 |
 | **SubAgent** | 模型自动调用 `task` 工具 | 把子任务派给隔离上下文的子代理，可并行 |
 

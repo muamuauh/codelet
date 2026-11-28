@@ -12,7 +12,7 @@
 
 <p>
   <img src="https://img.shields.io/static/v1?label=Version&message=v0.1.3&color=10b981&style=flat-square" alt="Version" />
-  <img src="https://img.shields.io/static/v1?label=Tests&message=360+passed&color=22c55e&style=flat-square" alt="Tests" />
+  <img src="https://img.shields.io/static/v1?label=Tests&message=361+passed&color=22c55e&style=flat-square" alt="Tests" />
   <img src="https://img.shields.io/static/v1?label=License&message=MIT&color=2563eb&style=flat-square" alt="License" />
   <img src="https://img.shields.io/static/v1?label=Python&message=3.10%2B&color=0f172a&style=flat-square" alt="Python" />
   <img src="https://img.shields.io/static/v1?label=UI&message=CLI+%7C+Web+%7C+Desktop&color=0284c7&style=flat-square" alt="UI" />
@@ -53,7 +53,7 @@
 | :--- | :--- |
 | **Async Parallel Agent Loop** | Native `asyncio` loop dispatching multiple tool calls concurrently via `asyncio.gather` while preserving exact `tool_use` order and isolating per-tool errors; streams text & reasoning deltas (`reasoning_delta` / `thinking_delta`) with instant **Stop** cancellation. |
 | **Native Cockpit Plugin** | Default-enabled `cockpit` plugin featuring project/session selector & auto-refresh toolbar, live SVG context ring + 5-segment hover breakdown + one-click `/compact`, prompt cache hit rate, TTFT/Avg/P95 latency & `tok/s` 24-turn trend charts, and provider-agnostic cross-session today / 7-day spend & model distribution charts. |
-| **Windows Desktop & 3-Pane Workbench** | Standalone **Windows Desktop App** (Electron + bundled PyInstaller FastAPI sidecar — zero Python setup) with native system tray, Explorer right-click **"Open with codelet"**, `electron-updater` GitHub Releases auto-update, in-app **API & Model Settings modal** (Windows DPAPI encrypted vault), per-profile **Model Directory** (API ID + custom display names) & **AI relay docs auto-discovery**, unified composer, workspace-grouped Conversations, and per-workspace persistence for Plugins/Tools/Skills/fold states. |
+| **Windows Desktop & 3-Pane Workbench** | Standalone **Windows Desktop App** (Electron + bundled PyInstaller FastAPI sidecar — zero Python setup) with close-to-tray prompt & preference persistence, Explorer right-click **"Open with codelet"**, `electron-updater` live download progress toast, and automated categorized English Release Notes; bottom-left 4-section **Settings Center** (**General / Models & API / Plugins / About**) featuring live Chinese/English language switching, agent/context tuning, Windows DPAPI encrypted key vault, card-based provider management, declarative per-plugin `settings_schema` forms, unified composer, workspace-grouped Conversations, and per-workspace persistence for mode/effort/Plugins/Tools/Skills/fold states. |
 | **Isolated `/btw` Side Q&A** | Dedicated side-panel Q&A (`Side /btw` tab & CLI `/btw`) with optional read-only main-context snapshot — **never mutates main conversation messages** and runs concurrently even while a main turn is busy. |
 | **Dynamic Model Catalog** | Periodically fetches models from OpenAI-compatible endpoints (`GET /v1/models`) with local TTL disk cache, searchable picker, vendor tabs, context length / pricing / vision / reasoning badges, and automatic pricing + context-window sync. |
 | **4-Layer Compaction & SubAgents** | L0 large-output spill → L1 zero-LLM old tool output clearing → L2 7-section structured rolling summary (usage-anchored, preserving todos) → L3 pair-safe hard ceiling; parallel isolated `task` subagents (max depth 2). |
@@ -97,7 +97,7 @@ Download from [GitHub Releases](https://github.com/muamuauh/codelet/releases/lat
 - **`codelet-x.y.z-portable.exe`** — Single-file portable executable.
 - **`codelet-x.y.z-win-x64-unpacked.zip`** — Extract and run `codelet.exe` directly.
 
-Click the top-right **Settings (⚙)** button to configure your provider, Base URL, and API Key (stored encrypted via Windows DPAPI).
+Click the bottom-left **Settings (⚙)** button to open the Settings Center — configure providers & API Keys (stored encrypted via Windows DPAPI), switch UI language (Chinese / English) and close-to-tray behavior under **General**, toggle and configure individual plugins under **Plugins**, and check for updates under **About**.
 
 ### Option B: Run from Source (CLI / Web / Desktop Dev)
 
@@ -166,7 +166,7 @@ flowchart LR
 ## Evaluations & Tests
 
 ```bash
-pytest -q                                        # 342 passed
+pytest -q                                        # 361 passed
 python -m evals.runner                           # local task eval suite
 python -m evals.swebench.run_swebench --gold --limit 5
 ```
